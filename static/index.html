@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="致远一号使用问答助手，支持知识库问答和使用排障。">
+  <title>致远一号使用问答助手</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="./" aria-label="致远一号使用问答助手首页">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>致远一号</strong><small>使用问答助手</small></span>
+      </a>
+      <div class="topbar-actions">
+        <div class="mode" id="model-status"><span aria-hidden="true"></span><b>正在连接</b></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell workspace">
+    <section class="intro" aria-labelledby="page-title">
+      <h1 id="page-title">知识库问答</h1>
+      <p id="page-description">就致远一号的使用问题提问，并查看回答引用的资料。</p>
+    </section>
+
+    <section class="cases" id="demo-cases" aria-label="选择演示案例" hidden>
+      <button class="case" data-case="api" type="button" aria-pressed="false">
+        <span class="case-icon api-icon" aria-hidden="true">API</span>
+        <span class="case-copy"><strong>首次调用 API 超时</strong><small>确认网络与 VPN，再根据重试结果排查鉴权</small></span>
+        <span class="case-play" aria-hidden="true"><i></i></span>
+      </button>
+      <button class="case" data-case="image" type="button" aria-pressed="false">
+        <span class="case-icon image-icon" aria-hidden="true"><i></i><i></i></span>
+        <span class="case-copy"><strong>自定义镜像缺依赖</strong><small>修改 Dockerfile，验证导入和原应用入口</small></span>
+        <span class="case-play" aria-hidden="true"><i></i></span>
+      </button>
+    </section>
+
+    <div class="panels knowledge" id="public-panels">
+      <section class="panel chat" aria-labelledby="chat-title">
+        <header class="panel-heading chat-heading">
+          <div>
+            <h2 id="chat-title">问答对话</h2>
+            <p id="playback-status" aria-live="polite">知识库问答</p>
+          </div>
+          <div class="chat-actions">
+            <button type="button" id="pause-playback" class="quiet" hidden>暂停</button>
+            <button type="button" id="finish-playback" class="quiet" hidden>查看全部</button>
+            <button type="button" id="reset" class="quiet">新会话</button>
+          </div>
+        </header>
+        <div class="chat-body" id="chat-scroll" tabindex="0" aria-label="问答对话记录">
+          <div class="welcome" id="welcome">
+            <span class="assistant-avatar" aria-hidden="true">远</span>
+            <h3 id="welcome-title">你想了解什么？</h3>
+            <p id="welcome-description">输入有关致远一号的问题，回答会附上引用的资料。</p>
+            <div class="suggestions" id="demo-suggestions" hidden>
+              <button type="button" class="suggestion" data-question="致远一号 API 连接超时了。">API 一直超时</button>
+              <button type="button" class="suggestion" data-question="自定义镜像启动时报错：ModuleNotFoundError: No module named 'yaml'">镜像启动时报缺少模块</button>
+            </div>
+          </div>
+          <div id="messages" class="messages" role="log" aria-label="对话消息" aria-live="polite"></div>
+        </div>
+        <form class="composer" id="composer">
+          <div class="input-row">
+            <textarea id="message" aria-label="问题" maxlength="4000" rows="2" placeholder="输入你的问题…" disabled></textarea>
+            <button id="send" class="primary" type="submit" disabled>发送</button>
+          </div>
+          <p>请先移除 API Key 和账号信息。Enter 发送，Shift + Enter 换行。</p>
+          <div class="error" id="error" role="alert" hidden></div>
+        </form>
+      </section>
+
+      <aside class="panel progress" id="progress-panel" aria-labelledby="progress-title" hidden>
+        <header class="panel-heading progress-heading">
+          <h2 id="progress-title">排查进度</h2>
+          <span id="progress-label" class="pill">待开始</span>
+        </header>
+        <div class="progress-body">
+          <section aria-labelledby="pending-title" class="pending-block">
+            <h3 id="pending-title"><span class="pending-dot" aria-hidden="true"></span> 当前待排查</h3>
+            <p id="pending">开始对话后显示下一步。</p>
+          </section>
+          <section class="facts-block" id="facts-block" hidden>
+            <h3>已确认信息</h3>
+            <dl id="facts"></dl>
+          </section>
+          <section class="history-block" aria-labelledby="history-title">
+            <h3 id="history-title">已完成的检查 <span id="history-total">0</span></h3>
+            <p class="empty" id="empty-history">还没有完成的检查。</p>
+            <ol id="history" class="history"></ol>
+          </section>
+        </div>
+      </aside>
+    </div>
+    <footer>由 OpenJiuwen 驱动 <span>·</span> <a href="https://claw.sjtu.edu.cn/guide/sjtu-api/" target="_blank" rel="noopener noreferrer">致远一号官方指南</a></footer>
+  </main>
+</body>
+</html>

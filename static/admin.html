@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知识库管理 · 致远一号</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./admin.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="./" aria-label="致远一号使用问答助手首页">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>致远一号</strong><small>知识库管理</small></span>
+      </a>
+      <div class="topbar-actions">
+        <a class="topbar-link" href="./">返回问答</a>
+        <button type="button" class="topbar-link" id="admin-logout" hidden>退出登录</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell workspace admin-workspace">
+    <section class="intro" aria-labelledby="page-title">
+      <h1 id="page-title">知识库管理</h1>
+    </section>
+    <p id="admin-session-status" class="admin-session-status" role="status">正在连接管理服务…</p>
+    <p id="admin-error" class="error admin-error" role="alert" hidden></p>
+    <button type="button" class="quiet" id="admin-retry" hidden>重新连接</button>
+
+    <section class="panel admin-login" id="login-panel" aria-labelledby="login-title" hidden>
+      <header class="panel-heading">
+        <h2 id="login-title">管理员登录</h2>
+      </header>
+      <form class="admin-form" id="admin-login">
+        <label for="password">管理员密码</label>
+        <input type="password" id="password" autocomplete="current-password" required>
+        <button type="submit" class="primary" id="login-submit">登录</button>
+      </form>
+    </section>
+
+    <section class="panel" id="upload-panel" aria-labelledby="upload-title" hidden>
+      <header class="panel-heading">
+        <h2 id="upload-title">上传资料</h2>
+      </header>
+      <form class="admin-form" id="document-upload">
+        <label for="document-file">文档文件</label>
+        <p id="upload-formats" class="admin-help">支持 TXT、Markdown、PDF。</p>
+        <div class="upload-row">
+          <input type="file" id="document-file" accept=".txt,.md,.pdf" aria-describedby="upload-formats" required>
+          <button type="submit" class="primary" id="upload-submit">上传并入库</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel" id="documents-panel" aria-labelledby="documents-title" hidden>
+      <header class="panel-heading">
+        <h2 id="documents-title">文档记录</h2>
+        <button type="button" class="quiet" id="refresh-documents">刷新状态</button>
+      </header>
+      <p class="admin-empty empty" id="empty-documents" hidden>还没有上传文档。</p>
+      <div class="documents-table" id="documents-table" role="region" aria-labelledby="documents-title" tabindex="0" hidden>
+        <table aria-labelledby="documents-title">
+          <thead>
+            <tr>
+              <th scope="col">文档</th>
+              <th scope="col">入库状态</th>
+              <th scope="col">片段数</th>
+              <th scope="col">上传时间</th>
+              <th scope="col">失败原因</th>
+            </tr>
+          </thead>
+          <tbody id="document-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,59 @@
+import unittest
+
+from fastapi.testclient import TestClient
+
+from web_server import COOKIE, create_web_app
+
+
+class WebTest(unittest.TestCase):
+    def test_web_demos_manual_turns_refresh_and_session_isolation(self):
+        with TestClient(create_web_app("")) as client:
+            home = client.get("/")
+            self.assertEqual(home.status_code, 200)
+            self.assertIn("自定义镜像缺依赖", home.text)
+            self.assertIn("default-src 'self'", home.headers["content-security-policy"])
+            self.assertEqual(client.get("/app.js").status_code, 200)
+            self.assertEqual(client.get("/styles.css").status_code, 200)
+            self.assertEqual(client.get("/api/session").json()["turns"], [])
+
+            api = client.post("/api/demo/api").json()["frames"]
+            self.assertEqual(len(api), 7)
+            self.assertIn("鉴权", api[4]["state"]["pending"])
+            self.assertIn("401", api[4]["state"]["history"][0])
+            self.assertEqual(api[-1]["state"]["status"], "resolved")
+            first_cookie = client.cookies.get(COOKIE)
+            self.assertEqual(len(client.get("/api/session").json()["turns"]), 7)
+
+            image = client.post("/api/demo/image").json()["frames"]
+            self.assertEqual(len(image), 8)
+            self.assertIn("Dockerfile", image[2]["turn"]["assistant"])
+            self.assertEqual(image[4]["state"]["pending"], "在新镜像中验证导入")
+            self.assertEqual(len(image[-1]["state"]["history"]), 5)
+            self.assertNotEqual(first_cookie, client.cookies.get(COOKIE))
+
+            other_browser = TestClient(client.app)
+            self.assertEqual(other_browser.get("/api/session").json()["turns"], [])
+            other_browser.close()
+            self.assertEqual(client.post("/api/reset").status_code, 200)
+            self.assertEqual(client.get("/api/session").json()["turns"], [])
+
+            initial = client.post("/api/turn", json={"message": "连接超时了"})
+            self.assertIn("httponly", client.post("/api/reset").headers["set-cookie"].lower())
+            self.assertEqual(initial.json()["state"]["pending"], "确认请求的运行位置")
+            client.post("/api/turn", json={"message": "我在校外，API 超时"})
+            vpn = client.post("/api/turn", json={"message": "没有"}).json()
+            self.assertEqual(vpn["state"]["facts"]["VPN"], "未连接")
+            changed = client.post("/api/turn", json={"message": "连上 VPN 后返回 401，API_KEY=fake-secret"})
+            self.assertNotIn("fake-secret", changed.text)
+            restored = client.get("/api/session").json()
+            self.assertEqual(restored["state"]["pending"], "本地核对鉴权后重试")
+            self.assertEqual(len(restored["turns"]), 3)
+            self.assertEqual(changed.headers["cache-control"], "no-store")
+
+            forbidden = client.post("/api/reset", headers={"Origin": "https://outside.example"})
+            self.assertEqual(forbidden.status_code, 403)
+            self.assertEqual(len(client.get("/api/session").json()["turns"]), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
