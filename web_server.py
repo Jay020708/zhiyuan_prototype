@@ -32,9 +32,14 @@ from knowledge_admin import AdminSessions, router as admin_router
 from knowledge_answer import UNAVAILABLE, answer_question, contextual_query, stream_answer
 from knowledge_base import BGEM3Embeddings, KnowledgeBase, KnowledgeBaseError
 from model_observer import DEFAULT_MODEL, KEY_ENV, SUPPORTED_MODELS, ZhiyuanObserver
+from usage_guidance import CLARIFY_GUIDANCE, should_diagnose, usage_guidance
 
 
 STATIC = Path(__file__).with_name("static")
+PRESET_ANSWERS = {
+    item["question"]: item["answer"]
+    for item in json.loads((STATIC / "faq.json").read_text(encoding="utf-8"))
+}
 COOKIE = "zhiyuan_session"
 BROWSER_COOKIE = "zhiyuan_browser"
 BROWSER_AGE = 365 * 24 * 60 * 60
@@ -78,6 +83,14 @@ def record_request(request_times, limit):
     return True
 
 
+def public_turn(pair):
+    sources = [
+        {key: source[key] for key in ("id", "filename", "location")}
+        for source in pair.get("sources", [])
+    ]
+    return {"user": pair["user"], "assistant": pair["assistant"], "sources": sources}
+
+
 class WebModelObserver(ZhiyuanObserver):
     def __init__(self, client, key, model):
         super().__init__(client, key, model)
@@ -97,9 +110,21 @@ class BrowserSession:
     case: str | None = None
     transcript: list = field(default_factory=list)
 
-    async def turn(self, message, knowledge=None, observer=None, on_preview=None):
+    async def local_reply(self, message, agent):
+        answer = usage_guidance(message, PRESET_ANSWERS)
+        if answer is None and should_diagnose(message, self.conversation.state):
+            answer = await self.conversation.turn(message, agent=agent)
+        return {"user": message, "assistant": answer or CLARIFY_GUIDANCE,
+                "interpreter": "guidance", "notice": None}
+
+    async def turn(self, message, knowledge=None, observer=None, on_preview=None, *, local_agent=None):
         clean = self.conversation.sanitize(message)
-        if knowledge is None:
+        if message in PRESET_ANSWERS:
+            pair = {"user": clean, "assistant": PRESET_ANSWERS[message], "interpreter": "preset",
+                    "notice": None}
+        elif local_agent is not None and (knowledge is None or observer is None):
+            pair = await self.local_reply(clean, local_agent)
+        elif knowledge is None:
             answer = await self.conversation.turn(clean)
             pair = {"user": clean, "assistant": answer, "interpreter": self.conversation.interpreter,
                     "notice": self.conversation.notice}
@@ -121,9 +146,12 @@ class BrowserSession:
                         return await observer.complete(messages, max_tokens=max_tokens, on_delta=publish)
                 result = await answer_question(clean, hits, complete, self.conversation.sanitize,
                                                history=self.transcript)
-            pair = {"user": clean, "assistant": result["answer"], "interpreter": "knowledge",
-                    "knowledge_status": result["status"], "notice": result["notice"], "sources": result["sources"],
-                    "follow_ups": result.get("follow_ups", [])}
+            if local_agent is not None and result["status"] in {"unavailable", "insufficient"}:
+                pair = await self.local_reply(clean, local_agent)
+            else:
+                pair = {"user": clean, "assistant": result["answer"], "interpreter": "knowledge",
+                        "knowledge_status": result["status"], "notice": result["notice"], "sources": result["sources"],
+                        "follow_ups": result.get("follow_ups", [])}
         write = asyncio.create_task(asyncio.to_thread(
             self.history.append, self.owner, self.conversation.id, pair, self.conversation.state,
         ))
@@ -169,7 +197,7 @@ class BrowserSession:
                 await task
 
     def summary(self):
-        if self.transcript and self.transcript[-1]["interpreter"] == "knowledge":
+        if self.transcript and self.transcript[-1]["interpreter"] in {"knowledge", "preset", "guidance"}:
             return None
         return self.conversation.summary()
 
@@ -250,8 +278,12 @@ def create_web_app(api_key=None):
         set_chat_cookie(request, response, COOKIE, session.conversation.id)
         return session
 
-    async def session_payload(owner, session):
+    async def session_payload(owner, session, view=None):
         conversations = await asyncio.to_thread(application.state.history.list, owner)
+        if view == "public":
+            return {"id": session.conversation.id if session else None,
+                    "turns": [public_turn(pair) for pair in session.transcript] if session else [],
+                    "conversations": conversations}
         return {"id": session.conversation.id if session else None,
                 "model": configured_model(),
                 "knowledge_base_enabled": application.state.knowledge is not None,
@@ -277,13 +309,13 @@ def create_web_app(api_key=None):
         return response
 
     @application.get("/api/session")
-    async def read_session(request: Request, response: Response):
+    async def read_session(request: Request, response: Response, view: Literal["public"] | None = None):
         owner = browser_owner(request, response)
         active_id = request.cookies.get(COOKIE)
         session = await get_session(owner, active_id)
         if active_id and session is None:
             response.delete_cookie(COOKIE)
-        return await session_payload(owner, session)
+        return await session_payload(owner, session, view)
 
     @application.get("/api/conversations")
     async def list_conversations(request: Request, response: Response):
@@ -292,21 +324,22 @@ def create_web_app(api_key=None):
 
     @application.post("/api/conversations")
     @application.post("/api/reset")
-    async def create_conversation(request: Request, response: Response):
+    async def create_conversation(request: Request, response: Response, view: Literal["public"] | None = None):
         owner = browser_owner(request, response)
         session = await persist_session(request, response, make_session(owner))
-        return await session_payload(owner, session)
+        return await session_payload(owner, session, view)
 
     @application.get("/api/conversations/{conversation_id}")
     @application.post("/api/conversations/{conversation_id}/select")
-    async def open_conversation(conversation_id: str, request: Request, response: Response):
+    async def open_conversation(conversation_id: str, request: Request, response: Response,
+                                view: Literal["public"] | None = None):
         owner = browser_owner(request, response, create=False)
         session = await get_session(owner, conversation_id)
         if session is None:
             raise HTTPException(404, "对话不存在。")
         if request.method == "POST":
             set_chat_cookie(request, response, COOKIE, conversation_id)
-        return await session_payload(owner, session)
+        return await session_payload(owner, session, view)
 
     def reserve_turn(key):
         active = application.state.active_turns
@@ -330,7 +363,7 @@ def create_web_app(api_key=None):
             application.state.active_turns.discard(key)
 
     @application.post("/api/turn")
-    async def next_turn(body: Turn, request: Request, response: Response):
+    async def next_turn(body: Turn, request: Request, response: Response, view: Literal["public"] | None = None):
         message = body.message.strip()
         if not message:
             raise HTTPException(422, "请输入问题或脱敏报错。")
@@ -354,11 +387,11 @@ def create_web_app(api_key=None):
                 raise HTTPException(429, "本次会话已到上限，请新建会话。")
             knowledge = application.state.knowledge
             observer = application.state.observer
-            if knowledge is not None and not record_request(
+            if message not in PRESET_ANSWERS and knowledge is not None and not record_request(
                 application.state.knowledge_requests, KNOWLEDGE_QUESTIONS_PER_MINUTE,
             ):
                 raise HTTPException(429, "知识库问答已达每分钟上限，请稍后再试。")
-            if request.headers.get("accept") == "application/x-ndjson":
+            if view is None and request.headers.get("accept") == "application/x-ndjson":
                 reply = ConversationStream(
                     session.stream_turn(message, knowledge, observer),
                     lambda: application.state.active_turns.discard(key),
@@ -366,7 +399,10 @@ def create_web_app(api_key=None):
                 reply.raw_headers.extend(header for header in response.raw_headers if header[0] == b"set-cookie")
                 streaming = True
                 return reply
-            result = await session.turn(message, knowledge, observer)
+            local_agent = application.state.demo_agent if view == "public" else None
+            result = await session.turn(message, knowledge, observer, local_agent=local_agent)
+            if view == "public":
+                return {"turn": public_turn(result["turn"]), **await session.metadata()}
             return {**result, **await session.metadata()}
         finally:
             if not streaming:

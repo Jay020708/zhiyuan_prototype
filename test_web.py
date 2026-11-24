@@ -18,7 +18,7 @@ class WebTest(unittest.TestCase):
         }), TestClient(create_web_app("")) as client:
             home = client.get("/")
             self.assertEqual(home.status_code, 200)
-            self.assertIn("自定义镜像缺依赖", home.text)
+            self.assertIn("推荐问题", home.text)
             self.assertIn("default-src 'self'", home.headers["content-security-policy"])
             self.assertEqual(client.get("/app.js").status_code, 200)
             self.assertEqual(client.get("/styles.css").status_code, 200)

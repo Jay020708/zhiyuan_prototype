@@ -112,8 +112,8 @@ class Conversation:
         self.interpreter = ""
         self.notice = ""
 
-    async def turn(self, message):
-        result = await Runner.run_agent(self.agent, {
+    async def turn(self, message, *, agent=None):
+        result = await Runner.run_agent(self.agent if agent is None else agent, {
             "query": self.sanitize(message), "state": self.state, "conversation_id": self.id,
         })
         output = result["output"].result["output"]

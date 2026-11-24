@@ -181,6 +181,36 @@ class RagWebTest(unittest.TestCase):
             self.assertFalse(inputs)
             self.assertEqual(len(model_calls), 1)
 
+    def test_public_page_preserves_history_and_hides_internal_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.app(root) as (browser, inputs, model_calls):
+                preset = browser.get("/faq.json").json()[0]
+                first = browser.post("/api/turn?view=public", json={"message": preset["question"]}).json()
+                self.assertEqual(first["turn"]["assistant"], preset["answer"])
+                self.assertEqual(set(first["turn"]), {"user", "assistant", "sources"})
+                self.assertEqual(inputs, [])
+                self.assertEqual(model_calls, [])
+                self.login(browser)
+                self.upload(browser, "联调.txt", FACT.encode())
+                response = browser.post("/api/turn?view=public", json={
+                    "message": "星舰联调窗口什么时候开放？", "conversation_id": first["id"],
+                }).json()
+                self.assertIn("每周三下午", response["turn"]["assistant"])
+                self.assertEqual(set(response["turn"]["sources"][0]), {"id", "filename", "location"})
+                created = browser.post("/api/reset?view=public", json={}).json()
+                self.assertNotEqual(created["id"], first["id"])
+                self.assertEqual(created["turns"], [])
+                selected = browser.post(f"/api/conversations/{first['id']}/select?view=public", json={}).json()
+                self.assertEqual(selected["turns"], [first["turn"], response["turn"]])
+                self.assertEqual(set(selected), {"id", "turns", "conversations"})
+                cookies = dict(browser.cookies)
+            with self.app(root) as (browser, _, _):
+                for key, value in cookies.items():
+                    browser.cookies.set(key, value)
+                restored = browser.get("/api/session?view=public").json()
+                self.assertEqual(restored["id"], first["id"])
+                self.assertEqual(restored["turns"], selected["turns"])
+
     def test_history_switch_context_restart_and_browser_ownership(self):
         with tempfile.TemporaryDirectory() as root:
             with self.app(root) as (browser, inputs, _):

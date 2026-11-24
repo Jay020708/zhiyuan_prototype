@@ -1,0 +1,14 @@
+[
+  {
+    "question": "你能提供什么功能？",
+    "answer": "我可以帮你找到致远一号的服务入口，了解模型 API、云主机和 ModelArts 的使用方式，也可以帮你排查环境、镜像和调用报错。\n\n如果你已经遇到问题，可以告诉我你要完成什么、在哪个环境运行、卡在哪一步，并贴出脱敏后的报错。"
+  },
+  {
+    "question": "如何安装致远一号的镜像？",
+    "answer": "先确认你在哪里使用镜像。\n\n• 如果是致远一号云主机，在创建弹性云服务器时选择公共镜像和需要的操作系统，然后按校方指南完成配置。\nhttps://claw.sjtu.edu.cn/guide/zhiyuan-cloud-host/\n\n• 如果是 ModelArts，先按 Notebook、训练或推理任务选择匹配的预置镜像。需要额外依赖时，在匹配的基础镜像上构建自定义镜像，按平台流程上传并选择对应标签，再验证任务能否启动。\nhttps://support.huaweicloud.com/docker-modelarts/docker-modelarts_6025.html"
+  },
+  {
+    "question": "如何安装致远一号的环境依赖？",
+    "answer": "先明确你是调用现成的模型 API，还是要在昇腾上运行自己的代码。\n\n• 调用模型 API 时，在项目的 Python 环境里安装客户端依赖，在本地配置 API 地址和密钥。校外使用交大 VPN，再依次验证模型列表和一次最小对话。\nhttps://claw.sjtu.edu.cn/guide/sjtu-api/\n\n• 在昇腾上运行代码时，先核对资源规格和基础镜像支持的 CPU 架构、CANN 和 PyTorch 版本。把项目依赖安装到实际运行程序的 Python 环境，先验证模块能导入，再启动应用。\nhttps://support.huaweicloud.com/intl/zh-cn/usermanual-standard-modelarts/docker-modelarts_6031.html"
+  }
+]
