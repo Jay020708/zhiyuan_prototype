@@ -10,6 +10,7 @@ from urllib.parse import quote
 import httpx
 from fastapi.testclient import TestClient
 
+from knowledge_base import KnowledgeBaseError
 from web_server import create_web_app
 
 
@@ -195,3 +196,16 @@ class RagWebTest(unittest.TestCase):
             self.assertEqual(turn["sources"], [])
             self.assertFalse(inputs)
             self.assertEqual(len(model_calls), 1)
+
+    def test_public_guidance_when_online_services_fail(self):
+        with tempfile.TemporaryDirectory() as root, self.app(root) as (public, _, _):
+            question = "ModelArts 里看不到我上传的镜像，怎么办？"
+            for failure in (
+                patch("web_server.KnowledgeBase.search", side_effect=KnowledgeBaseError("向量服务内部故障")),
+                patch("web_server.WebModelObserver.complete", return_value=(None, "模型内部故障")),
+            ):
+                with failure:
+                    result = public.post("/api/turn?view=public", json={"message": question})
+                    self.assertEqual(result.status_code, 200)
+                    self.assertIn("核对名称和标签", result.json()["turn"]["assistant"])
+                    self.assertNotIn("内部故障", result.text)

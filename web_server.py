@@ -27,6 +27,7 @@ from knowledge_admin import AdminSessions, router as admin_router
 from knowledge_answer import UNAVAILABLE, answer_question, stream_answer
 from knowledge_base import BGEM3Embeddings, KnowledgeBase, KnowledgeBaseError
 from model_observer import DEFAULT_MODEL, KEY_ENV, SUPPORTED_MODELS, ZhiyuanObserver
+from usage_guidance import CLARIFY_GUIDANCE, should_diagnose, usage_guidance
 
 
 STATIC = Path(__file__).with_name("static")
@@ -84,11 +85,20 @@ class BrowserSession:
     touched: float = field(default_factory=time.monotonic)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    async def turn(self, message, knowledge=None, observer=None, on_preview=None):
+    async def local_reply(self, message, agent):
+        answer = usage_guidance(message, PRESET_ANSWERS)
+        if answer is None and should_diagnose(message, self.conversation.state):
+            answer = await self.conversation.turn(message, agent=agent)
+        return {"user": message, "assistant": answer or CLARIFY_GUIDANCE,
+                "interpreter": "guidance", "notice": None}
+
+    async def turn(self, message, knowledge=None, observer=None, on_preview=None, *, local_agent=None):
         clean = self.conversation.sanitize(message)
         if message in PRESET_ANSWERS:
             pair = {"user": clean, "assistant": PRESET_ANSWERS[message], "interpreter": "preset",
                     "notice": None}
+        elif local_agent is not None and (knowledge is None or observer is None):
+            pair = await self.local_reply(clean, local_agent)
         elif knowledge is None:
             answer = await self.conversation.turn(clean)
             pair = {"user": clean, "assistant": answer, "interpreter": self.conversation.interpreter,
@@ -109,9 +119,12 @@ class BrowserSession:
                     async def complete(messages, *, max_tokens):
                         return await observer.complete(messages, max_tokens=max_tokens, on_delta=publish)
                 result = await answer_question(clean, hits, complete, self.conversation.sanitize)
-            pair = {"user": clean, "assistant": result["answer"], "interpreter": "knowledge",
-                    "knowledge_status": result["status"], "notice": result["notice"], "sources": result["sources"],
-                    "follow_ups": result.get("follow_ups", [])}
+            if local_agent is not None and result["status"] in {"unavailable", "insufficient"}:
+                pair = await self.local_reply(clean, local_agent)
+            else:
+                pair = {"user": clean, "assistant": result["answer"], "interpreter": "knowledge",
+                        "knowledge_status": result["status"], "notice": result["notice"], "sources": result["sources"],
+                        "follow_ups": result.get("follow_ups", [])}
         self.transcript.append(pair)
         self.touched = time.monotonic()
         return {"turn": pair, "state": self.summary()}
@@ -141,7 +154,7 @@ class BrowserSession:
                 await task
 
     def summary(self):
-        if self.transcript and self.transcript[-1]["interpreter"] in {"knowledge", "preset"}:
+        if self.transcript and self.transcript[-1]["interpreter"] in {"knowledge", "preset", "guidance"}:
             return None
         return self.conversation.summary()
 
@@ -260,14 +273,13 @@ def create_web_app(api_key=None):
         knowledge = application.state.knowledge
         observer = application.state.observer
         preset = message in PRESET_ANSWERS
-        if view == "public" and not preset and (knowledge is None or observer is None):
-            raise HTTPException(503, "问答服务暂不可用，请稍后再试。")
+        local_agent = application.state.demo_agent if view == "public" else None
         session = get_session(request) or new_session(request, response)
         if session.lock.locked():
             raise HTTPException(409, "本轮排查进行中，请稍后再试。")
         if len(session.transcript) >= TURN_LIMIT:
             raise HTTPException(429, "本次会话已到上限，请新建会话。")
-        if not preset and knowledge is not None and not record_request(
+        if not preset and knowledge is not None and (observer is not None or local_agent is None) and not record_request(
             application.state.knowledge_requests, KNOWLEDGE_QUESTIONS_PER_MINUTE,
         ):
             raise HTTPException(429, "知识库问答已达每分钟上限，请稍后再试。")
@@ -286,7 +298,7 @@ def create_web_app(api_key=None):
                                      headers={**dict(response.headers), "Cache-Control": "no-store",
                                               "X-Accel-Buffering": "no"})
         async with session.lock:
-            result = await session.turn(message, knowledge, observer)
+            result = await session.turn(message, knowledge, observer, local_agent=local_agent)
         return {"turn": public_turn(result["turn"])} if view == "public" else result
 
     @application.get("/api/health")

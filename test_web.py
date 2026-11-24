@@ -69,8 +69,18 @@ class WebTest(unittest.TestCase):
                 self.assertEqual(result.json(), {"turn": turn})
                 public_turns.append(turn)
 
-            unavailable = client.post("/api/turn?view=public", json={"message": "如何检查镜像架构？"})
-            self.assertEqual(unavailable.status_code, 503)
+            def ask(message):
+                result = client.post("/api/turn?view=public", json={"message": message})
+                self.assertEqual(result.status_code, 200)
+                turn = result.json()["turn"]
+                self.assertEqual(set(turn), {"user", "assistant", "sources"})
+                public_turns.append(turn)
+                return turn["assistant"]
+
+            self.assertIn("镜像管理", ask("ModelArts 里选不到我上传的镜像，怎么办？"))
+            self.assertIn("报错", ask("部署失败了"))
+            self.assertIn("运行位置", ask("我的模型 API 调用连接超时了"))
+            self.assertIn("重试", ask("在校外，没连 VPN"))
             self.assertEqual(client.get("/api/session?view=public").json(), {"turns": public_turns})
             self.assertEqual(client.post("/api/reset").status_code, 200)
             self.assertEqual(client.get("/api/session?view=public").json(), {"turns": []})
