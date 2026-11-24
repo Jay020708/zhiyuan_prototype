@@ -110,11 +110,16 @@ function appendSources(parent, sources) {
   parent.append(section);
 }
 
-function renderTurn(turn) {
+function renderUser(text) {
   const user = node("div", "message user");
   user.setAttribute("aria-label", "用户消息");
-  user.append(node("div", "bubble", turn.user));
+  user.append(node("div", "bubble", text));
+  $("#welcome").hidden = true;
+  messages.append(user);
+  return user;
+}
 
+function renderAnswer(turn) {
   const assistant = node("div", "message assistant");
   assistant.setAttribute("aria-label", "助手回复");
   const avatar = node("span", "assistant-avatar", "远");
@@ -126,9 +131,13 @@ function renderTurn(turn) {
   if (turn.sources?.length) appendSources(body, turn.sources);
   assistant.append(avatar, body);
 
-  $("#welcome").hidden = true;
-  messages.append(user, assistant);
+  messages.append(assistant);
   scroll.scrollTop = scroll.scrollHeight;
+}
+
+function renderTurn(turn) {
+  renderUser(turn.user);
+  renderAnswer(turn);
 }
 
 function renderSuggestions(items) {
@@ -144,15 +153,19 @@ async function sendQuestion(message, clearDraft = false) {
   if (!message || busy) return;
   busy = true;
   showError("");
+  const pendingUser = renderUser(message);
   replyStatus.hidden = false;
   scroll.scrollTop = scroll.scrollHeight;
   updateControls();
   try {
     const {turn} = await request("./api/turn?view=public", {message});
     replyStatus.hidden = true;
-    renderTurn(turn);
+    pendingUser.querySelector(".bubble").textContent = turn.user;
+    renderAnswer(turn);
     if (clearDraft) input.value = "";
   } catch (problem) {
+    pendingUser.remove();
+    $("#welcome").hidden = messages.children.length > 0;
     showError(problem instanceof TypeError ? "连接失败，请检查网络后重试。" : problem.message);
   } finally {
     replyStatus.hidden = true;

@@ -3,28 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="查询致远一号的环境配置、镜像部署和使用问题。">
-  <title>致远一号使用问答助手</title>
+  <meta name="description" content="向致远一号问答小助手了解环境配置、镜像部署和平台使用方法。">
+  <title>致远一号问答小助手</title>
   <link rel="stylesheet" href="./styles.css">
   <script defer src="./app.js"></script>
 </head>
-<body>
-  <header class="topbar">
-    <div class="shell topbar-inner">
-      <a class="brand" href="./" aria-label="致远一号使用问答助手首页">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span><strong>致远一号</strong><small>使用问答助手</small></span>
-      </a>
-      <a class="topbar-link" href="https://claw.sjtu.edu.cn/guide/sjtu-api/" target="_blank" rel="noopener noreferrer">官方指南</a>
+<body class="qa-page">
+  <header class="hero">
+    <img class="hero-image" src="./images/zhiyuan-banner.png" alt="红色灯光下的智算机房示意图" width="1536" height="512">
+    <div class="shell hero-content">
+      <a class="hero-guide" href="https://claw.sjtu.edu.cn/guide/sjtu-api/" target="_blank" rel="noopener noreferrer">官方指南</a>
+      <h1>致远一号问答小助手</h1>
+      <p>环境配置、镜像部署、平台使用，随时问我。</p>
     </div>
   </header>
 
   <main class="shell workspace qa-workspace">
-    <section class="intro" aria-labelledby="page-title">
-      <h1 id="page-title">你想了解什么？</h1>
-      <p>了解致远一号的环境配置、镜像部署和使用方法。</p>
-    </section>
-
     <section class="recommendations" aria-labelledby="suggestions-title">
       <h2 id="suggestions-title">推荐问题</h2>
       <div id="suggestions" class="suggestions"></div>
@@ -38,14 +32,18 @@
       <div class="chat-body" id="chat-scroll" tabindex="0" aria-label="对话记录">
         <div class="welcome" id="welcome">
           <span class="assistant-avatar" aria-hidden="true">远</span>
-          <p>选择一个推荐问题，或输入你遇到的问题。</p>
+          <h3>你好，我是致远一号问答小助手</h3>
+          <p>从入门到排障，我会帮你找到下一步。<br>点击上方的问题，或直接告诉我你想了解什么。</p>
         </div>
-        <div id="messages" class="messages" role="log" aria-label="对话消息"></div>
-        <p class="reply-status" id="reply-status" role="status" hidden>正在回答…</p>
+        <div id="messages" class="messages" role="log" aria-label="对话消息" aria-live="polite"></div>
+        <div class="reply-status" id="reply-status" role="status" hidden>
+          <span class="assistant-avatar" aria-hidden="true">远</span>
+          <span>正在回答<span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>
+        </div>
       </div>
       <form class="composer" id="composer">
         <div class="input-row">
-          <textarea id="message" aria-label="问题或脱敏报错" aria-describedby="input-help" maxlength="4000" rows="2" placeholder="输入你的问题…" disabled></textarea>
+          <textarea id="message" aria-label="问题或脱敏报错" aria-describedby="input-help" maxlength="4000" rows="2" placeholder="例如：如何安装镜像？也可以粘贴脱敏报错…" disabled></textarea>
           <button id="send" class="primary" type="submit" disabled>发送</button>
         </div>
         <p id="input-help">请先移除 API Key 和账号信息。Enter 发送，Shift + Enter 换行。</p>
