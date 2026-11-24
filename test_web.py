@@ -12,7 +12,8 @@ class WebTest(unittest.TestCase):
         with patch.dict(os.environ, {"ZHIYUAN_EMBEDDING_BASE_URL": ""}), TestClient(create_web_app("")) as client:
             home = client.get("/")
             self.assertEqual(home.status_code, 200)
-            self.assertIn("自定义镜像缺依赖", home.text)
+            self.assertIn("推荐问题", home.text)
+            self.assertNotIn("排查进度", home.text)
             self.assertIn("default-src 'self'", home.headers["content-security-policy"])
             self.assertEqual(client.get("/app.js").status_code, 200)
             self.assertEqual(client.get("/styles.css").status_code, 200)
@@ -55,6 +56,24 @@ class WebTest(unittest.TestCase):
             forbidden = client.post("/api/reset", headers={"Origin": "https://outside.example"})
             self.assertEqual(forbidden.status_code, 403)
             self.assertEqual(len(client.get("/api/session").json()["turns"]), 3)
+
+    def test_recommended_questions_are_available_without_model_or_knowledge(self):
+        with patch.dict(os.environ, {"ZHIYUAN_EMBEDDING_BASE_URL": ""}), TestClient(create_web_app("")) as client:
+            faq = client.get("/faq.json").json()
+            self.assertEqual(len(faq), 3)
+            public_turns = []
+            for entry in faq:
+                result = client.post("/api/turn?view=public", json={"message": entry["question"]})
+                self.assertEqual(result.status_code, 200)
+                turn = {"user": entry["question"], "assistant": entry["answer"], "sources": []}
+                self.assertEqual(result.json(), {"turn": turn})
+                public_turns.append(turn)
+
+            unavailable = client.post("/api/turn?view=public", json={"message": "如何检查镜像架构？"})
+            self.assertEqual(unavailable.status_code, 503)
+            self.assertEqual(client.get("/api/session?view=public").json(), {"turns": public_turns})
+            self.assertEqual(client.post("/api/reset").status_code, 200)
+            self.assertEqual(client.get("/api/session?view=public").json(), {"turns": []})
 
 
 if __name__ == "__main__":

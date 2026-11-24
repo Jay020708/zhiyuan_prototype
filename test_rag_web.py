@@ -62,7 +62,9 @@ class RagWebTest(unittest.TestCase):
                            for piece in (answer[:25], answer[25:])]
                 body = "".join(f"data: {event}\n\n" for event in [*updates, "[DONE]"])
                 return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
-            return httpx.Response(200, json={"choices": [{"message": {"content": answer}}]})
+            return httpx.Response(200, json={"choices": [{"message": {
+                "content": answer, "reasoning_content": "测试用的内部推理",
+            }}]})
 
         def model_client(**kwargs):
             return AsyncClient(transport=httpx.MockTransport(provider), **kwargs)
@@ -153,6 +155,27 @@ class RagWebTest(unittest.TestCase):
                 self.assertNotEqual(frames[1]["preview"], turn["assistant"])
                 self.assertEqual(frames[-1]["result"]["turn"], turn)
                 self.assertEqual(public.get("/api/session").json()["turns"][-1], turn)
+
+                inputs.clear()
+                model_calls.clear()
+                preset = public.get("/faq.json").json()[0]
+                preset_result = public.post("/api/turn?view=public", json={"message": preset["question"]})
+                self.assertEqual(preset_result.json()["turn"]["assistant"], preset["answer"])
+                self.assertEqual(inputs, [])
+                self.assertEqual(model_calls, [])
+
+                result = public.post("/api/turn?view=public", json={"message": question},
+                                     headers={"Accept": "application/x-ndjson"})
+                self.assertEqual(result.status_code, 200)
+                self.assertTrue(result.headers["content-type"].startswith("application/json"))
+                self.assertEqual(result.json(), {"turn": {
+                    "user": question, "assistant": turn["assistant"],
+                    "sources": [{"id": 1, "filename": "联调.txt", "location": turn["sources"][0]["location"]}],
+                }})
+                history = public.get("/api/session?view=public").json()
+                self.assertEqual(history["turns"][-2:], [preset_result.json()["turn"], result.json()["turn"]])
+                self.assertEqual(inputs, [question])
+                self.assertEqual(len(model_calls), 1)
 
     def test_invalid_upload_failed_index_and_logout(self):
         with tempfile.TemporaryDirectory() as root, self.app(root, limit=128) as (admin, inputs, model_calls):

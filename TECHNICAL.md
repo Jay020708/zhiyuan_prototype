@@ -2,9 +2,9 @@
 
 ## 应用形态
 
-网页采用同源部署。FastAPI 提供静态 HTML、CSS、JavaScript 和会话 API，OpenJiuwen `WorkflowAgent` 处理两类排障。一个 Python 进程即可运行这一版，浏览器不需要安装客户端。桌面浏览器把对话和排查状态并排显示，窄屏按对话、状态的顺序排列。
+网页采用同源部署。FastAPI 提供静态 HTML、CSS、JavaScript 和会话 API。首页展示推荐问题和对话记录，固定答复维护在 `static/faq.json`。OpenJiuwen `WorkflowAgent` 继续处理命令行和案例接口中的两类排障。
 
-手动对话时，后端把脱敏后的当前输入及必要的结构化上下文交给致远一号模型。模型只提取事实，程序校验字段并根据上轮状态选择下一步。模型请求失败时，界面显示回退原因。案例回放由本地规则和 OpenJiuwen 实际计算每轮回复和状态，示例输入在页面上有标识。
+自由提问时，后端在脱敏后检索资料并调用致远一号生成模型。首页使用 `view=public` 获取最终答复和参考文件位置。推荐问题直接返回固定答复，并与自由提问一起保存在当前会话。
 
 ## 安装和本机演示
 
@@ -16,7 +16,7 @@ python3.12 -m venv .venv
 .venv/bin/python web_server.py --live
 ```
 
-按提示隐藏输入比赛 API Key，在浏览器打开 [本机演示](http://127.0.0.1:8765/)。省略 `--live` 即可使用本地规则。也可在服务启动前由平台密钥管理注入 `ZHIYUAN_MODEL_API_KEY`，用 `ZHIYUAN_MODEL_NAME` 选择授权模型，默认 `deepseek-chat`。模型访问仍受校方网络要求约束。 [致远一号 API 文档](https://claw.sjtu.edu.cn/guide/sjtu-api/)
+按提示隐藏输入比赛 API Key，在浏览器打开 [问答首页](http://127.0.0.1:8765/)。仅体验推荐问题时可直接运行 `web_server.py`。也可在服务启动前由平台密钥管理注入 `ZHIYUAN_MODEL_API_KEY`，用 `ZHIYUAN_MODEL_NAME` 选择授权模型，默认 `deepseek-chat`。模型访问仍受校方网络要求约束。 [致远一号 API 文档](https://claw.sjtu.edu.cn/guide/sjtu-api/)
 
 ## 知识库部署与验收
 
@@ -68,10 +68,10 @@ export ZHIYUAN_EMBEDDING_BASE_URL=http://127.0.0.1:8080/v1
 | 接口 | 用途 |
 | --- | --- |
 | `GET /` | 返回网页和前端资源。 |
-| `GET /api/session` | 读取当前浏览器的排查状态、对话和配置的模型。 |
+| `GET /api/session` | 读取当前浏览器的会话。首页加 `?view=public` 获取简化后的对话历史。 |
 | `POST /api/demo/api` | 新建一条会话，运行 API 超时案例，返回逐轮回放帧。 |
 | `POST /api/demo/image` | 新建一条会话，运行镜像缺依赖案例，返回逐轮回放帧。 |
-| `POST /api/turn` | 接收 `{"message":"脱敏问题"}`，返回该轮对话。知识库回答包含 `sources` 和 `knowledge_status`。 |
+| `POST /api/turn` | 接收 `{"message":"脱敏问题"}`。首页加 `?view=public` 获取该轮问题、最终回答与参考文件位置。 |
 | `POST /api/reset` | 新建手动对话会话。 |
 | `GET /api/health` | 检查 HTTP 服务，并报告是否配置校内模型密钥。 |
 | `GET /admin` | 打开独立管理员后台。 |
@@ -99,8 +99,8 @@ export ZHIYUAN_EMBEDDING_BASE_URL=http://127.0.0.1:8080/v1
 
 | 建议时段 | 画面与讲解 |
 | --- | --- |
-| 0:00–0:12 | 打开应用，点「首次调用 API 超时」。交代两个案例与右侧排查进度。 |
-| 0:12–0:32 | 在 401 回合暂停，展示 VPN 已完成检查，待排查项已切换为鉴权。 |
-| 0:32–0:58 | 点「自定义镜像缺依赖」，在 Dockerfile 回复处暂停，展示依赖建议。继续回放，观察构建、导入、启动分别入账。 |
-| 0:58–1:20 | 新建会话，手动输入「等了很久，客户端自己断开」，回复设备位置，再展示模型继续问 VPN 和右侧待排查项更新。 |
+| 0:00–0:12 | 打开首页，展示三个推荐问题。 |
+| 0:12–0:32 | 点击镜像问题，展示云主机和 ModelArts 的不同入口与操作说明。 |
+| 0:32–0:58 | 输入推荐问题以外的报错，展示最终答复和参考资料。 |
+| 0:58–1:20 | 运行命令行排障演示，展示 API 重试后由超时切换到鉴权。 |
 | 1:20–1:30 | 上线后录制从交我办大赛专区进入并完成至少一轮真实模型问答。 |

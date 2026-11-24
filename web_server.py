@@ -30,6 +30,10 @@ from model_observer import DEFAULT_MODEL, KEY_ENV, SUPPORTED_MODELS, ZhiyuanObse
 
 
 STATIC = Path(__file__).with_name("static")
+PRESET_ANSWERS = {
+    item["question"]: item["answer"]
+    for item in json.loads((STATIC / "faq.json").read_text(encoding="utf-8"))
+}
 COOKIE = "zhiyuan_session"
 SESSION_AGE = 3600
 SESSION_LIMIT = 128
@@ -53,6 +57,14 @@ def record_request(request_times, limit):
     return True
 
 
+def public_turn(pair):
+    sources = [
+        {key: source[key] for key in ("id", "filename", "location")}
+        for source in pair.get("sources", [])
+    ]
+    return {"user": pair["user"], "assistant": pair["assistant"], "sources": sources}
+
+
 class WebModelObserver(ZhiyuanObserver):
     def __init__(self, client, key, model):
         super().__init__(client, key, model)
@@ -74,7 +86,10 @@ class BrowserSession:
 
     async def turn(self, message, knowledge=None, observer=None, on_preview=None):
         clean = self.conversation.sanitize(message)
-        if knowledge is None:
+        if message in PRESET_ANSWERS:
+            pair = {"user": clean, "assistant": PRESET_ANSWERS[message], "interpreter": "preset",
+                    "notice": None}
+        elif knowledge is None:
             answer = await self.conversation.turn(clean)
             pair = {"user": clean, "assistant": answer, "interpreter": self.conversation.interpreter,
                     "notice": self.conversation.notice}
@@ -126,7 +141,7 @@ class BrowserSession:
                 await task
 
     def summary(self):
-        if self.transcript and self.transcript[-1]["interpreter"] == "knowledge":
+        if self.transcript and self.transcript[-1]["interpreter"] in {"knowledge", "preset"}:
             return None
         return self.conversation.summary()
 
@@ -214,8 +229,10 @@ def create_web_app(api_key=None):
         return response
 
     @application.get("/api/session")
-    async def read_session(request: Request):
+    async def read_session(request: Request, view: Literal["public"] | None = None):
         session = get_session(request)
+        if view == "public":
+            return {"turns": [public_turn(pair) for pair in session.transcript] if session else []}
         enabled = application.state.knowledge is not None
         if session is None:
             return {"model": configured_model(), "knowledge_base_enabled": enabled, "case": None, "turns": [], "state": None}
@@ -236,26 +253,30 @@ def create_web_app(api_key=None):
         return {"frames": frames, "case": case}
 
     @application.post("/api/turn")
-    async def next_turn(body: Turn, request: Request, response: Response):
+    async def next_turn(body: Turn, request: Request, response: Response, view: Literal["public"] | None = None):
         message = body.message.strip()
         if not message:
             raise HTTPException(422, "请输入问题或脱敏报错。")
+        knowledge = application.state.knowledge
+        observer = application.state.observer
+        preset = message in PRESET_ANSWERS
+        if view == "public" and not preset and (knowledge is None or observer is None):
+            raise HTTPException(503, "问答服务暂不可用，请稍后再试。")
         session = get_session(request) or new_session(request, response)
         if session.lock.locked():
             raise HTTPException(409, "本轮排查进行中，请稍后再试。")
         if len(session.transcript) >= TURN_LIMIT:
             raise HTTPException(429, "本次会话已到上限，请新建会话。")
-        if application.state.knowledge is not None and not record_request(
+        if not preset and knowledge is not None and not record_request(
             application.state.knowledge_requests, KNOWLEDGE_QUESTIONS_PER_MINUTE,
         ):
             raise HTTPException(429, "知识库问答已达每分钟上限，请稍后再试。")
-        if request.headers.get("accept") == "application/x-ndjson":
+        if view is None and request.headers.get("accept") == "application/x-ndjson":
             await session.lock.acquire()
 
             async def stream():
                 try:
-                    async with aclosing(session.stream_turn(message, application.state.knowledge,
-                                                            application.state.observer)) as events:
+                    async with aclosing(session.stream_turn(message, knowledge, observer)) as events:
                         async for event in events:
                             yield event
                 finally:
@@ -265,7 +286,8 @@ def create_web_app(api_key=None):
                                      headers={**dict(response.headers), "Cache-Control": "no-store",
                                               "X-Accel-Buffering": "no"})
         async with session.lock:
-            return await session.turn(message, application.state.knowledge, application.state.observer)
+            result = await session.turn(message, knowledge, observer)
+        return {"turn": public_turn(result["turn"])} if view == "public" else result
 
     @application.get("/api/health")
     async def health():
