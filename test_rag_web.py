@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote
@@ -44,7 +44,15 @@ class RagWebTest(unittest.TestCase):
             model_calls.append(messages)
             self.assertEqual(messages[0]["role"], "system")
             content = json.loads(messages[1]["content"])
-            if "passages" not in content:
+            if payload["max_tokens"] == 256:
+                self.assertEqual(content["question"], "那校外呢？")
+                self.assertIn("联调窗口", content["history"][-1]["user"])
+                result = {"query": "校外如何使用星舰联调窗口？"}
+            elif content["question"] == "那校外呢？":
+                self.assertIn("联调窗口", content["history"][-1]["user"])
+                self.assertIn(FACT, content["passages"][0]["text"])
+                result = {"answer": "资料中的联调窗口每周三下午开放。 [1]", "evidence": [{"id": 1}]}
+            elif "passages" not in content:
                 self.assertIn(content["question"], ("你好", "JUNO 编号是多少？"))
                 result = {"answer": "你好！有什么可以帮你？" if content["question"] == "你好" else "我不确定这个编号。"}
             elif content["question"] == "你好，今天可以聊聊联调以外的事吗？":
@@ -172,3 +180,37 @@ class RagWebTest(unittest.TestCase):
             self.assertEqual(turn["sources"], [])
             self.assertFalse(inputs)
             self.assertEqual(len(model_calls), 1)
+
+    def test_history_switch_context_restart_and_browser_ownership(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.app(root) as (browser, inputs, _):
+                self.login(browser)
+                self.assertEqual(self.upload(browser, "联调.txt", FACT.encode()).status_code, 202)
+                first = browser.post("/api/conversations", json={}).json()["id"]
+                original = self.ask(browser, "星舰联调窗口什么时候开放？")
+                second = browser.post("/api/conversations", json={}).json()
+                self.assertEqual(second["turns"], [])
+                self.assertNotEqual(first, second["id"])
+                self.assertEqual([item["id"] for item in second["conversations"]], [second["id"], first])
+                selected = browser.post(f"/api/conversations/{first}/select", json={}).json()
+                self.assertEqual(selected["turns"], [original])
+                self.assertEqual(browser.get("/api/session").json()["id"], first)
+                reply = browser.post("/api/turn", json={"conversation_id": first, "message": "那校外呢？"}).json()
+                self.assertIn("校外如何使用星舰联调窗口？", inputs)
+                self.assertEqual(reply["turn"]["sources"][0]["filename"], "联调.txt")
+                self.assertEqual([item["id"] for item in reply["conversations"]], [first, second["id"]])
+                cookies = dict(browser.cookies)
+
+            with self.app(root) as (browser, _, _):
+                for key, value in cookies.items():
+                    browser.cookies.set(key, value)
+                restored = browser.get("/api/session").json()
+                self.assertEqual(restored["id"], first)
+                self.assertEqual(restored["turns"], [original, reply["turn"]])
+                self.assertEqual(browser.get(f"/api/conversations/{second['id']}").json()["turns"], [])
+                with closing(TestClient(browser.app)) as other:
+                    other.get("/api/session")
+                    self.assertEqual(other.get("/api/conversations").json()["conversations"], [])
+                    self.assertEqual(other.get(f"/api/conversations/{first}").status_code, 404)
+                    self.assertEqual(other.post(f"/api/conversations/{first}/select", json={}).status_code, 404)
+                    self.assertEqual(other.post("/api/turn", json={"conversation_id": first, "message": "你好"}).status_code, 404)

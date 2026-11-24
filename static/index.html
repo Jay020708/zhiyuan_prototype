@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="致远一号使用问答助手，支持知识库问答和使用排障。">
   <title>致远一号使用问答助手</title>
-  <link rel="stylesheet" href="./styles.css">
-  <script defer src="./app.js"></script>
+  <link rel="stylesheet" href="./styles.css?v=chat-polish-1">
+  <script defer src="./app.js?v=history-3"></script>
 </head>
-<body>
+<body class="qa-page">
   <header class="topbar">
     <div class="shell topbar-inner">
       <a class="brand" href="./" aria-label="致远一号使用问答助手首页">
@@ -24,7 +24,7 @@
   <main class="shell workspace">
     <section class="intro" aria-labelledby="page-title">
       <h1 id="page-title">知识库问答</h1>
-      <p id="page-description">就致远一号的使用问题提问，并查看回答引用的资料。</p>
+      <p id="page-description">就致远一号的使用问题提问。</p>
     </section>
 
     <section class="cases" id="demo-cases" aria-label="选择演示案例" hidden>
@@ -41,6 +41,18 @@
     </section>
 
     <div class="panels knowledge" id="public-panels">
+      <aside class="panel conversation-nav" aria-labelledby="conversation-nav-title">
+        <header class="panel-heading">
+          <h2 id="conversation-nav-title">历史对话</h2>
+          <button type="button" id="toggle-history" class="quiet" aria-expanded="true" aria-controls="conversation-history">收起历史</button>
+        </header>
+        <button type="button" id="new-conversation" class="quiet" disabled>＋ 新建对话</button>
+        <div class="conversation-nav-body" id="conversation-history">
+          <p class="empty" id="conversation-empty">正在加载对话…</p>
+          <ul id="conversation-list" class="conversation-list" aria-labelledby="conversation-nav-title"></ul>
+        </div>
+      </aside>
+
       <section class="panel chat" aria-labelledby="chat-title">
         <header class="panel-heading chat-heading">
           <div>
@@ -50,14 +62,13 @@
           <div class="chat-actions">
             <button type="button" id="pause-playback" class="quiet" hidden>暂停</button>
             <button type="button" id="finish-playback" class="quiet" hidden>查看全部</button>
-            <button type="button" id="reset" class="quiet">新会话</button>
           </div>
         </header>
         <div class="chat-body" id="chat-scroll" tabindex="0" aria-label="问答对话记录">
           <div class="welcome" id="welcome">
             <span class="assistant-avatar" aria-hidden="true">远</span>
             <h3 id="welcome-title">你想了解什么？</h3>
-            <p id="welcome-description">输入有关致远一号的问题，回答会附上引用的资料。</p>
+            <p id="welcome-description">输入有关致远一号的问题，开始一段对话。</p>
             <div class="suggestions" id="demo-suggestions" hidden>
               <button type="button" class="suggestion" data-question="致远一号 API 连接超时了。">API 一直超时</button>
               <button type="button" class="suggestion" data-question="自定义镜像启动时报错：ModuleNotFoundError: No module named 'yaml'">镜像启动时报缺少模块</button>

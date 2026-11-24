@@ -2,6 +2,8 @@
 
 const $ = (selector) => document.querySelector(selector);
 const caseButtons = [...document.querySelectorAll("[data-case]")];
+const conversationList = $("#conversation-list");
+const newConversation = $("#new-conversation");
 const messages = $("#messages");
 const scroll = $("#chat-scroll");
 const input = $("#message");
@@ -10,6 +12,7 @@ const allowedDocs = new Set(["claw.sjtu.edu.cn", "apps.hpc.sjtu.edu.cn", "docs.d
   "pip.pypa.io", "support.huaweicloud.com"]);
 const caseTitles = {api: "API 超时", image: "镜像缺依赖"};
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+let activeConversationId = null;
 let activeCase = null;
 let busy = true;
 let playback = null;
@@ -27,7 +30,8 @@ function updateControls() {
     button.disabled = busy;
     button.setAttribute("aria-pressed", String(button.dataset.case === activeCase));
   }
-  $("#reset").disabled = busy;
+  newConversation.disabled = busy;
+  for (const button of conversationList.querySelectorAll("button")) button.disabled = busy;
   input.disabled = busy || Boolean(playback);
   for (const button of messages.querySelectorAll(".follow-ups button")) button.disabled = input.disabled;
   $("#send").disabled = input.disabled || !input.value.trim();
@@ -43,12 +47,12 @@ function configureMode(enabled) {
   $("#demo-suggestions").hidden = enabled;
   $("#progress-panel").hidden = enabled;
   $("#page-title").textContent = enabled ? "知识库问答" : "使用排障";
-  $("#page-description").textContent = enabled ? "就致远一号的使用问题提问，并查看回答引用的资料。" :
+  $("#page-description").textContent = enabled ? "就致远一号的使用问题提问。" :
     "选择一个案例查看完整排查过程，或输入你的问题开始对话。";
   $("#chat-title").textContent = enabled ? "问答对话" : "排障对话";
   $("#playback-status").textContent = enabled ? "知识库问答" : "手动对话";
   $("#welcome-title").textContent = enabled ? "你想了解什么？" : "今天遇到了什么问题？";
-  $("#welcome-description").textContent = enabled ? "输入有关致远一号的问题，回答会附上引用的资料。" :
+  $("#welcome-description").textContent = enabled ? "输入有关致远一号的问题，开始一段对话。" :
     "发来错误码或脱敏日志。我会根据你的环境和每次重试的结果继续排查。";
   scroll.setAttribute("aria-label", enabled ? "问答对话记录" : "排障对话记录");
   input.setAttribute("aria-label", enabled ? "问题" : "问题或脱敏报错");
@@ -60,13 +64,54 @@ function showError(message) {
   error.hidden = !message;
 }
 
-async function request(path, data) {
+function renderConversationList({id, conversations}) {
+  activeConversationId = id;
+  const empty = $("#conversation-empty");
+  empty.textContent = "还没有历史对话。";
+  empty.hidden = conversations.length > 0;
+  const scrollTop = conversationList.scrollTop;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const lastWeek = new Date(today);
+  lastWeek.setDate(today.getDate() - 6);
+  const groups = new Map([["今天", []], ["昨天", []], ["最近七天", []], ["更早", []]]);
+  for (const conversation of conversations) {
+    const date = new Date(conversation.updated_at);
+    const label = date >= today ? "今天" : date >= yesterday ? "昨天" : date >= lastWeek ? "最近七天" : "更早";
+    const item = node("li");
+    const button = node("button", "conversation-item");
+    button.type = "button";
+    button.disabled = busy;
+    button.title = conversation.title;
+    if (conversation.id === activeConversationId) button.setAttribute("aria-current", "true");
+    button.addEventListener("click", () => openConversation(conversation.id, button));
+    button.append(node("span", "conversation-title", conversation.title));
+    item.append(button);
+    groups.get(label).push(item);
+  }
+  const sections = [];
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    const section = node("li", "conversation-group");
+    const list = node("ul");
+    list.setAttribute("aria-label", label);
+    list.append(...items);
+    section.append(node("h3", "", label), list);
+    sections.push(section);
+  }
+  conversationList.replaceChildren(...sections);
+  conversationList.scrollTop = scrollTop;
+}
+
+async function request(path, data, signal) {
   const options = data === undefined ? {} : {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(data),
   };
-  const response = await fetch(`./api/${path}`, options);
+  const response = await fetch(`./api/${path}`, {...options, signal});
   const result = await response.json().catch(() => null);
   if (!response.ok || !result) {
     throw new Error(typeof result?.detail === "string" ? result.detail : "服务暂时无法响应，请重试。");
@@ -126,20 +171,11 @@ function appendAnswer(parent, content) {
   }
 }
 
-function appendSources(parent, sources) {
-  const section = node("details", "answer-sources");
-  const list = node("ul", "source-list");
-  for (const source of sources) {
-    const item = node("li", "answer-source");
-    const title = node("div", "source-title");
-    title.append(node("span", "source-number", `[${source.id}]`), node("strong", "", source.filename));
-    item.append(title);
-    if (source.location) item.append(node("small", "source-location", source.location));
-    if (source.quote) item.append(node("blockquote", "source-quote", source.quote));
-    list.append(item);
-  }
-  section.append(node("summary", "", `引用来源（${sources.length}）`), list);
-  parent.append(section);
+function answerWithoutCitations(text, sources) {
+  const ids = sources && new Set(sources.map((source) => String(source.id)));
+  return text.split(/(```[\s\S]*?```|`[^`\n]*`)/g).map((part, index) =>
+    index % 2 ? part : part.replace(/[ \t]*\[(\d+)\]/g, (marker, id) => !ids || ids.has(id) ? "" : marker)
+  ).join("");
 }
 
 function sendSuggestedQuestion(question) {
@@ -149,7 +185,7 @@ function sendSuggestedQuestion(question) {
   $("#composer").requestSubmit();
 }
 
-function addMessage(role, text, {note, sources, followUps, insufficient} = {}) {
+function addMessage(role, text, {note, followUps, insufficient} = {}) {
   const row = node("div", `message ${role}`);
   const body = node("div", "message-content");
   const bubble = node("div", "bubble");
@@ -160,12 +196,10 @@ function addMessage(role, text, {note, sources, followUps, insufficient} = {}) {
     const avatar = node("span", "assistant-avatar", "远");
     avatar.setAttribute("aria-hidden", "true");
     row.append(avatar);
-    if (sources) bubble.textContent = text;
-    else appendAnswer(bubble, text);
+    appendAnswer(bubble, text);
   }
   if (insufficient) body.append(node("p", "answer-status", "资料不足"));
   body.append(bubble);
-  if (sources?.length) appendSources(body, sources);
   if (note) body.append(node("p", "message-note", note));
   if (followUps?.length) {
     const section = node("section", "follow-ups");
@@ -188,9 +222,8 @@ function addMessage(role, text, {note, sources, followUps, insufficient} = {}) {
 function addTurn(turn, isDemo = false) {
   addMessage("user", turn.user);
   if (turn.interpreter === "knowledge") {
-    addMessage("assistant", turn.assistant, {
+    addMessage("assistant", turn.sources?.length ? answerWithoutCitations(turn.assistant, turn.sources) : turn.assistant, {
       note: turn.notice,
-      sources: turn.sources,
       followUps: turn.follow_ups,
       insufficient: turn.knowledge_status === "insufficient",
     });
@@ -237,7 +270,17 @@ function renderState(state) {
 function clearConversation() {
   messages.replaceChildren();
   $("#welcome").hidden = false;
-  renderState(null);
+  scroll.scrollTop = 0;
+}
+
+function restoreConversation(data) {
+  activeCase = data.case;
+  renderConversationList(data);
+  clearConversation();
+  for (const turn of data.turns) addTurn(turn);
+  renderState(data.state);
+  $("#playback-status").textContent = knowledgeMode ? "知识库问答" :
+    activeCase ? `${caseTitles[activeCase]} · 会话记录` : "手动对话";
 }
 
 function cancelPlayback() {
@@ -286,7 +329,9 @@ async function loadDemo(caseId) {
   try {
     const data = await request(`demo/${caseId}`, {});
     activeCase = data.case;
+    renderConversationList(data);
     clearConversation();
+    renderState(null);
     playback = {frames: data.frames, index: 0, timer: null, paused: false};
     playNext(reducedMotion.matches);
   } catch (problem) {
@@ -298,22 +343,27 @@ async function loadDemo(caseId) {
   }
 }
 
-async function resetConversation() {
+async function openConversation(conversationId = null, trigger = newConversation) {
+  if (busy || (conversationId && conversationId === activeConversationId)) return;
   busy = true;
-  cancelPlayback();
+  updateControls();
   showError("");
+  let opened = false;
   try {
-    await request("reset", {});
-    activeCase = null;
+    const path = conversationId ? `conversations/${encodeURIComponent(conversationId)}/select` : "conversations";
+    const data = await request(path, {});
+    cancelPlayback();
     input.value = "";
-    clearConversation();
-    $("#playback-status").textContent = knowledgeMode ? "知识库问答" : "手动对话";
+    restoreConversation(data);
+    opened = true;
   } catch (problem) {
     showError(problem.message);
   } finally {
     busy = false;
     updateControls();
-    input.focus();
+    if (opened && conversationId) conversationList.querySelector('[aria-current="true"]')?.focus({preventScroll: true});
+    else if (opened) input.focus();
+    else trigger.focus({preventScroll: true});
   }
 }
 
@@ -329,16 +379,16 @@ async function sendMessage(event) {
   heading.textContent = knowledgeMode ? "正在检索资料…" : "正在排查…";
   $("#welcome").hidden = true;
   const pendingUser = addMessage("user", value);
-  const pendingAssistant = addMessage("assistant", "", {sources: []});
+  const pendingAssistant = addMessage("assistant", "");
   const preview = pendingAssistant.querySelector(".bubble");
   preview.textContent = "正在生成回答…";
   input.value = "";
   scroll.scrollTop = scroll.scrollHeight;
   try {
-    const result = await requestStream(value, (event) => {
+    const result = await requestStream(value, activeConversationId, (event) => {
       if (typeof event.user === "string") pendingUser.querySelector(".bubble").textContent = event.user;
       if (typeof event.preview === "string") {
-        preview.textContent = event.preview;
+        preview.textContent = knowledgeMode ? answerWithoutCitations(event.preview).replace(/\[\d*$/, "") : event.preview;
         scroll.scrollTop = scroll.scrollHeight;
       }
     });
@@ -346,6 +396,7 @@ async function sendMessage(event) {
     pendingAssistant.remove();
     addTurn(result.turn);
     renderState(result.state);
+    renderConversationList(result);
     input.value = "";
     heading.textContent = knowledgeMode ? "知识库问答" :
       activeCase ? `${caseTitles[activeCase]} · 手动续问` : "手动对话";
@@ -363,11 +414,11 @@ async function sendMessage(event) {
   }
 }
 
-async function requestStream(message, onEvent) {
+async function requestStream(message, conversationId, onEvent) {
   const response = await fetch("./api/turn", {
     method: "POST",
     headers: {"Content-Type": "application/json", "Accept": "application/x-ndjson"},
-    body: JSON.stringify({message}),
+    body: JSON.stringify({message, conversation_id: conversationId}),
   });
   if (!response.ok || !response.headers.get("content-type")?.includes("application/x-ndjson")) {
     const data = await response.json();
@@ -401,20 +452,21 @@ async function requestStream(message, onEvent) {
 async function initialize() {
   updateControls();
   const status = $("#model-status");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
   try {
-    const session = await request("session");
+    const session = await request("session", undefined, controller.signal);
     configureMode(Boolean(session.knowledge_base_enabled));
     status.classList.toggle("live", knowledgeMode || Boolean(session.model));
     status.querySelector("b").textContent = knowledgeMode ? "知识库问答" :
       session.model ? `手动对话 · ${session.model}` : "本地规则模式";
-    activeCase = session.case;
-    for (const turn of session.turns) addTurn(turn);
-    renderState(session.state);
-    if (activeCase) $("#playback-status").textContent = `${caseTitles[activeCase]} · 会话记录`;
+    restoreConversation(session);
   } catch (problem) {
     status.querySelector("b").textContent = "服务未连接";
-    showError(problem.message);
+    $("#conversation-empty").textContent = "暂时无法加载历史对话。";
+    showError(controller.signal.aborted ? "加载对话超时，请刷新页面重试。" : problem.message);
   } finally {
+    clearTimeout(timeout);
     busy = false;
     updateControls();
   }
@@ -426,7 +478,13 @@ for (const button of document.querySelectorAll("[data-question]")) {
 }
 $("#finish-playback").addEventListener("click", () => playNext(true));
 $("#pause-playback").addEventListener("click", togglePlayback);
-$("#reset").addEventListener("click", resetConversation);
+newConversation.addEventListener("click", () => openConversation());
+$("#toggle-history").addEventListener("click", (event) => {
+  const history = $("#conversation-history");
+  history.hidden = !history.hidden;
+  event.currentTarget.setAttribute("aria-expanded", String(!history.hidden));
+  event.currentTarget.textContent = history.hidden ? "展开历史" : "收起历史";
+});
 $("#composer").addEventListener("submit", sendMessage);
 input.addEventListener("input", updateControls);
 input.addEventListener("keydown", (event) => {
