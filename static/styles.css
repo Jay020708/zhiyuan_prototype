@@ -60,6 +60,8 @@ a { color: var(--accent); }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; min-width: 0; box-shadow: 0 5px 16px #28435b0a; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 58px; padding: 10px 18px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { font-size: 16px; margin: 0; }
+.chat-tools { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.chat-tools select { font: inherit; font-size: 14px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 7px; padding: 6px; max-width: 220px; min-width: 0; }
 .quiet, .suggestion { border: 1px solid var(--line); color: var(--ink); background: #fff; border-radius: 8px; font-size: 14px; }
 .quiet { padding: 7px 10px; }
 .quiet:enabled:hover, .suggestion:enabled:hover { background: var(--tint); border-color: var(--accent); }
@@ -147,6 +149,7 @@ a { color: var(--accent); }
   .suggestions { grid-template-columns: 1fr; gap: 6px; }
   .suggestion { min-height: 44px; padding-block: 8px; }
   .panel-heading { padding-inline: 12px; }
+  .chat-tools select { max-width: 145px; }
   .chat-body { height: clamp(220px, calc(100dvh - 565px), 620px); padding: 14px 11px; }
   .welcome h3 { font-size: 17px; }
   .composer { padding-inline: 10px; }

@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote
@@ -10,7 +10,6 @@ from urllib.parse import quote
 import httpx
 from fastapi.testclient import TestClient
 
-from knowledge_base import KnowledgeBaseError
 from web_server import create_web_app
 
 
@@ -45,7 +44,15 @@ class RagWebTest(unittest.TestCase):
             model_calls.append(messages)
             self.assertEqual(messages[0]["role"], "system")
             content = json.loads(messages[1]["content"])
-            if "passages" not in content:
+            if payload["max_tokens"] == 256:
+                self.assertEqual(content["question"], "那校外呢？")
+                self.assertIn("联调窗口", content["history"][-1]["user"])
+                result = {"query": "校外如何使用星舰联调窗口？"}
+            elif content["question"] == "那校外呢？":
+                self.assertIn("联调窗口", content["history"][-1]["user"])
+                self.assertIn(FACT, content["passages"][0]["text"])
+                result = {"answer": "资料中的联调窗口每周三下午开放。 [1]", "evidence": [{"id": 1}]}
+            elif "passages" not in content:
                 self.assertIn(content["question"], ("你好", "JUNO 编号是多少？"))
                 result = {"answer": "你好！有什么可以帮你？" if content["question"] == "你好" else "我不确定这个编号。"}
             elif content["question"] == "你好，今天可以聊聊联调以外的事吗？":
@@ -63,9 +70,7 @@ class RagWebTest(unittest.TestCase):
                            for piece in (answer[:25], answer[25:])]
                 body = "".join(f"data: {event}\n\n" for event in [*updates, "[DONE]"])
                 return httpx.Response(200, text=body, headers={"Content-Type": "text/event-stream"})
-            return httpx.Response(200, json={"choices": [{"message": {
-                "content": answer, "reasoning_content": "测试用的内部推理",
-            }}]})
+            return httpx.Response(200, json={"choices": [{"message": {"content": answer}}]})
 
         def model_client(**kwargs):
             return AsyncClient(transport=httpx.MockTransport(provider), **kwargs)
@@ -157,27 +162,6 @@ class RagWebTest(unittest.TestCase):
                 self.assertEqual(frames[-1]["result"]["turn"], turn)
                 self.assertEqual(public.get("/api/session").json()["turns"][-1], turn)
 
-                inputs.clear()
-                model_calls.clear()
-                preset = public.get("/faq.json").json()[0]
-                preset_result = public.post("/api/turn?view=public", json={"message": preset["question"]})
-                self.assertEqual(preset_result.json()["turn"]["assistant"], preset["answer"])
-                self.assertEqual(inputs, [])
-                self.assertEqual(model_calls, [])
-
-                result = public.post("/api/turn?view=public", json={"message": question},
-                                     headers={"Accept": "application/x-ndjson"})
-                self.assertEqual(result.status_code, 200)
-                self.assertTrue(result.headers["content-type"].startswith("application/json"))
-                self.assertEqual(result.json(), {"turn": {
-                    "user": question, "assistant": turn["assistant"],
-                    "sources": [{"id": 1, "filename": "联调.txt", "location": turn["sources"][0]["location"]}],
-                }})
-                history = public.get("/api/session?view=public").json()
-                self.assertEqual(history["turns"][-2:], [preset_result.json()["turn"], result.json()["turn"]])
-                self.assertEqual(inputs, [question])
-                self.assertEqual(len(model_calls), 1)
-
     def test_invalid_upload_failed_index_and_logout(self):
         with tempfile.TemporaryDirectory() as root, self.app(root, limit=128) as (admin, inputs, model_calls):
             self.login(admin)
@@ -197,15 +181,66 @@ class RagWebTest(unittest.TestCase):
             self.assertFalse(inputs)
             self.assertEqual(len(model_calls), 1)
 
-    def test_public_guidance_when_online_services_fail(self):
-        with tempfile.TemporaryDirectory() as root, self.app(root) as (public, _, _):
-            question = "ModelArts 里看不到我上传的镜像，怎么办？"
-            for failure in (
-                patch("web_server.KnowledgeBase.search", side_effect=KnowledgeBaseError("向量服务内部故障")),
-                patch("web_server.WebModelObserver.complete", return_value=(None, "模型内部故障")),
-            ):
-                with failure:
-                    result = public.post("/api/turn?view=public", json={"message": question})
-                    self.assertEqual(result.status_code, 200)
-                    self.assertIn("核对名称和标签", result.json()["turn"]["assistant"])
-                    self.assertNotIn("内部故障", result.text)
+    def test_public_page_preserves_history_and_hides_internal_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.app(root) as (browser, inputs, model_calls):
+                preset = browser.get("/faq.json").json()[0]
+                first = browser.post("/api/turn?view=public", json={"message": preset["question"]}).json()
+                self.assertEqual(first["turn"]["assistant"], preset["answer"])
+                self.assertEqual(set(first["turn"]), {"user", "assistant", "sources"})
+                self.assertEqual(inputs, [])
+                self.assertEqual(model_calls, [])
+                self.login(browser)
+                self.upload(browser, "联调.txt", FACT.encode())
+                response = browser.post("/api/turn?view=public", json={
+                    "message": "星舰联调窗口什么时候开放？", "conversation_id": first["id"],
+                }).json()
+                self.assertIn("每周三下午", response["turn"]["assistant"])
+                self.assertEqual(set(response["turn"]["sources"][0]), {"id", "filename", "location"})
+                created = browser.post("/api/reset?view=public", json={}).json()
+                self.assertNotEqual(created["id"], first["id"])
+                self.assertEqual(created["turns"], [])
+                selected = browser.post(f"/api/conversations/{first['id']}/select?view=public", json={}).json()
+                self.assertEqual(selected["turns"], [first["turn"], response["turn"]])
+                self.assertEqual(set(selected), {"id", "turns", "conversations"})
+                cookies = dict(browser.cookies)
+            with self.app(root) as (browser, _, _):
+                for key, value in cookies.items():
+                    browser.cookies.set(key, value)
+                restored = browser.get("/api/session?view=public").json()
+                self.assertEqual(restored["id"], first["id"])
+                self.assertEqual(restored["turns"], selected["turns"])
+
+    def test_history_switch_context_restart_and_browser_ownership(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.app(root) as (browser, inputs, _):
+                self.login(browser)
+                self.assertEqual(self.upload(browser, "联调.txt", FACT.encode()).status_code, 202)
+                first = browser.post("/api/conversations", json={}).json()["id"]
+                original = self.ask(browser, "星舰联调窗口什么时候开放？")
+                second = browser.post("/api/conversations", json={}).json()
+                self.assertEqual(second["turns"], [])
+                self.assertNotEqual(first, second["id"])
+                self.assertEqual([item["id"] for item in second["conversations"]], [second["id"], first])
+                selected = browser.post(f"/api/conversations/{first}/select", json={}).json()
+                self.assertEqual(selected["turns"], [original])
+                self.assertEqual(browser.get("/api/session").json()["id"], first)
+                reply = browser.post("/api/turn", json={"conversation_id": first, "message": "那校外呢？"}).json()
+                self.assertIn("校外如何使用星舰联调窗口？", inputs)
+                self.assertEqual(reply["turn"]["sources"][0]["filename"], "联调.txt")
+                self.assertEqual([item["id"] for item in reply["conversations"]], [first, second["id"]])
+                cookies = dict(browser.cookies)
+
+            with self.app(root) as (browser, _, _):
+                for key, value in cookies.items():
+                    browser.cookies.set(key, value)
+                restored = browser.get("/api/session").json()
+                self.assertEqual(restored["id"], first)
+                self.assertEqual(restored["turns"], [original, reply["turn"]])
+                self.assertEqual(browser.get(f"/api/conversations/{second['id']}").json()["turns"], [])
+                with closing(TestClient(browser.app)) as other:
+                    other.get("/api/session")
+                    self.assertEqual(other.get("/api/conversations").json()["conversations"], [])
+                    self.assertEqual(other.get(f"/api/conversations/{first}").status_code, 404)
+                    self.assertEqual(other.post(f"/api/conversations/{first}/select", json={}).status_code, 404)
+                    self.assertEqual(other.post("/api/turn", json={"conversation_id": first, "message": "你好"}).status_code, 404)

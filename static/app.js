@@ -7,9 +7,11 @@ const input = $("#message");
 const error = $("#error");
 const suggestions = $("#suggestions");
 const replyStatus = $("#reply-status");
+const conversationList = $("#conversation-list");
 const allowedDocs = new Set(["claw.sjtu.edu.cn", "apps.hpc.sjtu.edu.cn", "docs.docker.com",
   "pip.pypa.io", "support.huaweicloud.com"]);
 let busy = true;
+let conversationId = null;
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -21,6 +23,7 @@ function node(tag, className, text) {
 function updateControls() {
   for (const button of suggestions.children) button.disabled = busy;
   $("#reset").disabled = busy;
+  conversationList.disabled = busy || conversationList.options.length < 2;
   input.disabled = busy;
   $("#send").disabled = busy || !input.value.trim();
 }
@@ -140,6 +143,44 @@ function renderTurn(turn) {
   renderAnswer(turn);
 }
 
+function renderHistory(conversations) {
+  const placeholder = node("option", "", "历史对话");
+  placeholder.value = "";
+  placeholder.disabled = true;
+  conversationList.replaceChildren(placeholder);
+  for (const conversation of conversations) {
+    const option = node("option", "", conversation.title);
+    option.value = conversation.id;
+    conversationList.append(option);
+  }
+  conversationList.value = conversationId || "";
+}
+
+function loadSession(session) {
+  conversationId = session.id;
+  messages.replaceChildren();
+  $("#welcome").hidden = session.turns.length > 0;
+  for (const turn of session.turns) renderTurn(turn);
+  renderHistory(session.conversations);
+}
+
+async function selectConversation() {
+  busy = true;
+  showError("");
+  updateControls();
+  try {
+    const id = encodeURIComponent(conversationList.value);
+    const session = await request("./api/conversations/" + id + "/select?view=public", {});
+    loadSession(session);
+  } catch {
+    conversationList.value = conversationId || "";
+    showError("暂时无法打开这段对话，请稍后重试。");
+  } finally {
+    busy = false;
+    updateControls();
+  }
+}
+
 function renderSuggestions(items) {
   for (const {question} of items) {
     const button = node("button", "suggestion", question);
@@ -158,10 +199,14 @@ async function sendQuestion(message, clearDraft = false) {
   scroll.scrollTop = scroll.scrollHeight;
   updateControls();
   try {
-    const {turn} = await request("./api/turn?view=public", {message});
+    const {turn, id, conversations} = await request("./api/turn?view=public", {
+      message, conversation_id: conversationId,
+    });
     replyStatus.hidden = true;
     pendingUser.querySelector(".bubble").textContent = turn.user;
     renderAnswer(turn);
+    conversationId = id;
+    renderHistory(conversations);
     if (clearDraft) input.value = "";
   } catch (problem) {
     pendingUser.remove();
@@ -180,9 +225,7 @@ async function resetConversation() {
   showError("");
   updateControls();
   try {
-    await request("./api/reset", {});
-    messages.replaceChildren();
-    $("#welcome").hidden = false;
+    loadSession(await request("./api/reset?view=public", {}));
     input.value = "";
     scroll.scrollTop = 0;
   } catch {
@@ -201,7 +244,7 @@ async function initialize() {
       request("./api/session?view=public"),
     ]);
     renderSuggestions(items);
-    for (const turn of session.turns) renderTurn(turn);
+    loadSession(session);
   } catch {
     showError("暂时无法加载会话，请刷新页面重试。");
   } finally {
@@ -211,6 +254,7 @@ async function initialize() {
 }
 
 $("#reset").addEventListener("click", resetConversation);
+conversationList.addEventListener("change", selectConversation);
 $("#composer").addEventListener("submit", (event) => {
   event.preventDefault();
   sendQuestion(input.value.trim(), true);

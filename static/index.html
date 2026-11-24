@@ -27,7 +27,12 @@
     <section class="panel chat" aria-labelledby="chat-title">
       <header class="panel-heading">
         <h2 id="chat-title">对话</h2>
-        <button type="button" id="reset" class="quiet" disabled>新会话</button>
+        <div class="chat-tools">
+          <select id="conversation-list" aria-label="历史对话" disabled>
+            <option value="">历史对话</option>
+          </select>
+          <button type="button" id="reset" class="quiet" disabled>新会话</button>
+        </div>
       </header>
       <div class="chat-body" id="chat-scroll" tabindex="0" aria-label="对话记录">
         <div class="welcome" id="welcome">
