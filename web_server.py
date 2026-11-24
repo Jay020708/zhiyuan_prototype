@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -279,6 +280,7 @@ app = create_web_app()
 
 
 def main():
+    load_dotenv(Path(__file__).with_name(".env"), interpolate=False)
     parser = argparse.ArgumentParser(description="启动致远一号网页演示")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--live", action="store_true", help="安全输入赛事 API Key，用于手动对话")

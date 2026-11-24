@@ -1,4 +1,6 @@
+import os
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -7,7 +9,7 @@ from web_server import COOKIE, create_web_app
 
 class WebTest(unittest.TestCase):
     def test_web_demos_manual_turns_refresh_and_session_isolation(self):
-        with TestClient(create_web_app("")) as client:
+        with patch.dict(os.environ, {"ZHIYUAN_EMBEDDING_BASE_URL": ""}), TestClient(create_web_app("")) as client:
             home = client.get("/")
             self.assertEqual(home.status_code, 200)
             self.assertIn("自定义镜像缺依赖", home.text)
