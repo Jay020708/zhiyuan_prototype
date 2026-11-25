@@ -1,46 +1,58 @@
 <!doctype html>
 <html lang="zh-CN">
+<!-- 页面配置：编码、标题、样式和交互脚本 -->
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="致远一号使用问答助手，支持知识库问答和使用排障。">
+  <meta name="theme-color" content="#771923">
   <title>致远一号使用问答助手</title>
-  <link rel="stylesheet" href="./styles.css?v=chat-polish-1">
-  <script defer src="./app.js?v=history-3"></script>
+  <link rel="stylesheet" href="./styles.css?v=campus-1">
+  <script defer src="./app.js?v=history-merge-1"></script>
 </head>
 <body class="qa-page">
-  <header class="topbar">
-    <div class="shell topbar-inner">
-      <a class="brand" href="./" aria-label="致远一号使用问答助手首页">
-        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-        <span><strong>致远一号</strong><small>使用问答助手</small></span>
-      </a>
-      <div class="topbar-actions">
-        <div class="mode" id="model-status"><span aria-hidden="true"></span><b>正在连接</b></div>
+  <!-- 顶部：校园图片、导航、连接状态和页面介绍 -->
+  <header class="campus-masthead">
+    <img class="campus-photo" src="./campus-east-gate.jpg" alt="" width="1440" height="960" fetchpriority="high">
+    <div class="topbar">
+      <div class="shell topbar-inner">
+        <a class="brand" href="./" aria-label="致远一号使用问答助手首页">
+          <span class="brand-mark" aria-hidden="true">远</span>
+          <strong>致远助手</strong>
+        </a>
+        <div class="topbar-actions">
+          <a class="topbar-link" href="https://claw.sjtu.edu.cn/guide/sjtu-api/" target="_blank" rel="noopener noreferrer">官方指南 <span aria-hidden="true">↗</span></a>
+          <div class="mode" id="model-status"><span aria-hidden="true"></span><b>正在连接</b></div>
+        </div>
       </div>
+    </div>
+    <div class="shell intro">
+      <p class="campus-event">上海交通大学 · 交我创智能体创新大赛</p>
+      <h1 id="page-title">致远一号问答与排障</h1>
+      <p class="campus-description">查询官方指南，或贴出脱敏报错，按提示继续排查。</p>
     </div>
   </header>
 
-  <main class="shell workspace">
-    <section class="intro" aria-labelledby="page-title">
-      <h1 id="page-title">知识库问答</h1>
-      <p id="page-description">就致远一号的使用问题提问。</p>
-    </section>
-
-    <section class="cases" id="demo-cases" aria-label="选择演示案例" hidden>
-      <button class="case" data-case="api" type="button" aria-pressed="false">
-        <span class="case-icon api-icon" aria-hidden="true">API</span>
-        <span class="case-copy"><strong>首次调用 API 超时</strong><small>确认网络与 VPN，再根据重试结果排查鉴权</small></span>
-        <span class="case-play" aria-hidden="true"><i></i></span>
-      </button>
-      <button class="case" data-case="image" type="button" aria-pressed="false">
-        <span class="case-icon image-icon" aria-hidden="true"><i></i><i></i></span>
-        <span class="case-copy"><strong>自定义镜像缺依赖</strong><small>修改 Dockerfile，验证导入和原应用入口</small></span>
-        <span class="case-play" aria-hidden="true"><i></i></span>
-      </button>
+  <main class="shell workspace" aria-labelledby="page-title">
+    <!-- 排障演示入口：选择 API 或镜像案例 -->
+    <section class="demo-tools" aria-labelledby="demo-title">
+      <h2 class="demo-title" id="demo-title">排障演示</h2>
+      <div class="cases" id="demo-cases">
+        <button class="case" data-case="api" type="button" aria-pressed="false">
+          <span class="case-icon api-icon" aria-hidden="true">API</span>
+          <span class="case-copy"><strong>首次调用 API 超时</strong><small>从网络和 VPN 排查到鉴权</small></span>
+          <span class="case-play" aria-hidden="true"><i></i></span>
+        </button>
+        <button class="case" data-case="image" type="button" aria-pressed="false">
+          <span class="case-icon image-icon" aria-hidden="true"><i></i><i></i></span>
+          <span class="case-copy"><strong>自定义镜像缺依赖</strong><small>修改 Dockerfile 并验证启动</small></span>
+          <span class="case-play" aria-hidden="true"><i></i></span>
+        </button>
+      </div>
     </section>
 
     <div class="panels knowledge" id="public-panels">
+      <!-- 历史对话列表和新建对话入口 -->
       <aside class="panel conversation-nav" aria-labelledby="conversation-nav-title">
         <header class="panel-heading">
           <h2 id="conversation-nav-title">历史对话</h2>
@@ -53,23 +65,25 @@
         </div>
       </aside>
 
+      <!-- 对话区：消息记录、快捷提问和输入表单 -->
       <section class="panel chat" aria-labelledby="chat-title">
         <header class="panel-heading chat-heading">
           <div>
-            <h2 id="chat-title">问答对话</h2>
-            <p id="playback-status" aria-live="polite">知识库问答</p>
+            <h2 id="chat-title">对话</h2>
+            <p id="playback-status" aria-live="polite">正在连接</p>
           </div>
           <div class="chat-actions">
             <button type="button" id="pause-playback" class="quiet" hidden>暂停</button>
             <button type="button" id="finish-playback" class="quiet" hidden>查看全部</button>
+            <button type="button" id="exit-demo" class="quiet" hidden>返回我的对话</button>
           </div>
         </header>
         <div class="chat-body" id="chat-scroll" tabindex="0" aria-label="问答对话记录">
           <div class="welcome" id="welcome">
             <span class="assistant-avatar" aria-hidden="true">远</span>
             <h3 id="welcome-title">你想了解什么？</h3>
-            <p id="welcome-description">输入有关致远一号的问题，开始一段对话。</p>
-            <div class="suggestions" id="demo-suggestions" hidden>
+            <div class="suggestions" id="demo-suggestions">
+              <button type="button" class="suggestion" data-question="致远一号的 API Key 怎么申请？">怎么申请 API Key？</button>
               <button type="button" class="suggestion" data-question="致远一号 API 连接超时了。">API 一直超时</button>
               <button type="button" class="suggestion" data-question="自定义镜像启动时报错：ModuleNotFoundError: No module named 'yaml'">镜像启动时报缺少模块</button>
             </div>
@@ -78,7 +92,7 @@
         </div>
         <form class="composer" id="composer">
           <div class="input-row">
-            <textarea id="message" aria-label="问题" maxlength="4000" rows="2" placeholder="输入你的问题…" disabled></textarea>
+            <textarea id="message" aria-label="问题或脱敏报错" maxlength="4000" rows="2" placeholder="输入问题或粘贴脱敏报错…" disabled></textarea>
             <button id="send" class="primary" type="submit" disabled>发送</button>
           </div>
           <p>请先移除 API Key 和账号信息。Enter 发送，Shift + Enter 换行。</p>
@@ -86,6 +100,7 @@
         </form>
       </section>
 
+      <!-- 排查进度：默认隐藏，按需要显示当前问题和已完成的检查 -->
       <aside class="panel progress" id="progress-panel" aria-labelledby="progress-title" hidden>
         <header class="panel-heading progress-heading">
           <h2 id="progress-title">排查进度</h2>
@@ -108,7 +123,32 @@
         </div>
       </aside>
     </div>
-    <footer>由 OpenJiuwen 驱动 <span>·</span> <a href="https://claw.sjtu.edu.cn/guide/sjtu-api/" target="_blank" rel="noopener noreferrer">致远一号官方指南</a></footer>
+    <!-- 页脚：技术与图片来源 -->
+    <footer class="campus-footer">
+      <span>由 OpenJiuwen 驱动</span>
+      <a href="https://commons.wikimedia.org/wiki/File:Sjtu_east_gate.jpg" target="_blank" rel="noopener noreferrer">交大闵行校区东门摄影 · PhilHu</a>
+    </footer>
   </main>
+  <!-- 对话管理弹窗：重命名或确认删除对话 -->
+  <dialog id="conversation-dialog" class="conversation-dialog panel" aria-labelledby="conversation-dialog-title">
+    <h2 id="conversation-dialog-title">管理对话</h2>
+    <form id="rename-conversation">
+      <label for="conversation-name">对话名称</label>
+      <input id="conversation-name" type="text" required maxlength="32" autocomplete="off">
+      <div class="conversation-dialog-actions">
+        <button type="button" class="quiet danger" id="start-delete-conversation">删除对话</button>
+        <button type="button" class="quiet" id="close-conversation-dialog">取消</button>
+        <button type="submit" class="quiet save-name">保存名称</button>
+      </div>
+    </form>
+    <form id="delete-conversation" hidden>
+      <p>删除「<strong id="conversation-delete-name"></strong>」及其所有消息？此操作无法撤销。</p>
+      <div class="conversation-dialog-actions">
+        <button type="button" class="quiet" id="cancel-delete-conversation">返回</button>
+        <button type="submit" class="quiet danger">确认删除</button>
+      </div>
+    </form>
+    <p class="error" id="conversation-dialog-error" role="alert" hidden></p>
+  </dialog>
 </body>
 </html>

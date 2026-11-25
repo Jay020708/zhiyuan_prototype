@@ -85,7 +85,7 @@ class WorkflowIntegrationTest(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(reply)}}]})
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            observer = ZhiyuanObserver(client, fake_key)
+            observer = ZhiyuanObserver(client, fake_key, base_url="https://models.sjtu.edu.cn/api/v1")
             agent = build_agent(observer)
             self.addAsyncCleanup(Runner.stop)
             conversation = Conversation(agent, observer.sanitize)

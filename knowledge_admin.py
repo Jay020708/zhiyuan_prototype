@@ -3,9 +3,11 @@
 import asyncio
 import logging
 import os
+import re
 import secrets
 import time
 from collections import deque
+from hashlib import sha256
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -13,6 +15,8 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, SecretStr
 from starlette.requests import ClientDisconnect
+
+from knowledge_base import KnowledgeBaseError, official_source
 
 
 ADMIN_COOKIE = "zhiyuan_admin"
@@ -82,13 +86,20 @@ class AdminSessions:
 
 
 def admin_enabled(request):
-    return bool(request.app.state.admin.password and request.app.state.knowledge)
+    return bool(request.app.state.admin.password)
 
 
 def require_admin(request):
     if not request.app.state.admin.authenticated(request):
         raise HTTPException(403, "请先登录管理员后台。")
-    return request.app.state.knowledge
+
+
+def require_knowledge(request):
+    require_admin(request)
+    knowledge = request.app.state.knowledge
+    if knowledge is None:
+        raise HTTPException(503, "知识库索引未就绪，请查看服务状态。")
+    return knowledge
 
 
 @router.get("/admin", include_in_schema=False)
@@ -100,6 +111,7 @@ async def admin_page():
 async def admin_session(request: Request):
     admin = request.app.state.admin
     return {"authenticated": admin.authenticated(request), "enabled": admin_enabled(request),
+            "knowledge_configured": request.app.state.knowledge is not None,
             "upload_limit_bytes": admin.upload_limit}
 
 
@@ -122,8 +134,14 @@ async def admin_logout(request: Request, response: Response):
 
 @router.get("/api/admin/documents")
 async def admin_documents(request: Request):
-    knowledge = require_admin(request)
+    knowledge = require_knowledge(request)
     return {"documents": await asyncio.to_thread(knowledge.list_documents)}
+
+
+@router.get("/api/admin/services")
+async def admin_services(request: Request):
+    require_admin(request)
+    return await request.app.state.service_status.check()
 
 
 def identify_upload(request):
@@ -166,6 +184,23 @@ async def read_upload(request, limit):
     return bytes(contents)
 
 
+async def replacement_target(request, knowledge):
+    """Resolve an optional document that the new upload supersedes."""
+    document_id = request.headers.get("x-document-supersedes", "").strip()
+    if not document_id:
+        return None
+    if not re.fullmatch(r"[a-f0-9]{32}", document_id):
+        raise HTTPException(422, "要替换的文档编号无效。")
+    target = await asyncio.to_thread(knowledge.get_document, document_id)
+    if target is None:
+        raise HTTPException(404, "要替换的文档不存在。")
+    if target["superseded_by"] is not None:
+        raise HTTPException(409, "该文档已被新版本替代，请替换当前版本。")
+    if target["status"] not in {"indexed", "failed"}:
+        raise HTTPException(409, "只有已入库或入库失败的文档可以替换为新版本。")
+    return target
+
+
 async def finish_index(knowledge, lock, document_id, file_type, contents):
     try:
         await knowledge.index_document(document_id, file_type, contents)
@@ -177,17 +212,53 @@ async def finish_index(knowledge, lock, document_id, file_type, contents):
 
 @router.post("/api/admin/documents", status_code=202)
 async def upload_document(request: Request, background: BackgroundTasks):
-    knowledge = require_admin(request)
+    knowledge = require_knowledge(request)
     filename, file_type = identify_upload(request)
+    source_url = request.headers.get("x-document-source-url")
+    if source_url is not None and not official_source(source_url):
+        raise HTTPException(422, "文档原文链接必须是受支持的官方 HTTPS 地址。")
     admin = request.app.state.admin
     lock = admin.upload
     if lock.locked():
         raise HTTPException(409, "已有文件正在处理，请完成后再上传。")
     await lock.acquire()
     try:
+        target = await replacement_target(request, knowledge)
+        if source_url is None and target is not None:
+            source_url = target["source_url"]
         contents = await read_upload(request, admin.upload_limit)
-        document = await asyncio.to_thread(knowledge.create_document, filename, file_type)
+        try:
+            document = await asyncio.to_thread(
+                knowledge.create_document, filename, file_type,
+                source_url=source_url, sha256=sha256(contents).hexdigest(),
+                contents=contents, supersedes=target["id"] if target else None,
+            )
+        except KnowledgeBaseError as exc:
+            raise HTTPException(409, str(exc)) from exc
         background.add_task(finish_index, knowledge, lock, document["id"], file_type, contents)
+    except BaseException:
+        lock.release()
+        raise
+    return {"document": document}
+
+
+@router.post("/api/admin/documents/{document_id}/retry", status_code=202)
+async def retry_document(document_id: str, request: Request, background: BackgroundTasks):
+    knowledge = require_knowledge(request)
+    if not re.fullmatch(r"[a-f0-9]{32}", document_id):
+        raise HTTPException(404, "文档不存在。")
+    admin = request.app.state.admin
+    lock = admin.upload
+    if lock.locked():
+        raise HTTPException(409, "已有文件正在处理，请完成后再试。")
+    await lock.acquire()
+    try:
+        try:
+            file_type, contents = await asyncio.to_thread(knowledge.prepare_retry, document_id)
+        except KnowledgeBaseError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        document = await asyncio.to_thread(knowledge.get_document, document_id)
+        background.add_task(finish_index, knowledge, lock, document_id, file_type, contents)
     except BaseException:
         lock.release()
         raise

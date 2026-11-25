@@ -4,6 +4,7 @@ import re
 
 
 API_GUIDE = "https://claw.sjtu.edu.cn/guide/sjtu-api/"
+
 BASE_URL = "https://models.sjtu.edu.cn/api/v1"
 
 SECRET_PATTERNS = (
@@ -138,7 +139,7 @@ RESPONSES = {
         "第 1 节与第 4 节",
     ),
     "ask_location": ("我先确认请求的运行位置。你是在校内运行，还是在校外个人电脑运行？", None),
-    "ask_vpn": ("记下了，请求在校外运行。发起请求的电脑已经连接交大 VPN 了吗？", None),
+    "ask_vpn": ("记下了，请求在校外运行。发起请求的电脑已经连接交大 VPN 了吗？", "第 2 节"),
     "check_vpn": (
         f"先在发起请求的电脑上连接交大 VPN，然后在本地重试 GET {BASE_URL}/models。"
         "预期会返回模型列表。请告诉我是拿到列表、仍然超时，还是返回了 HTTP 状态码。",

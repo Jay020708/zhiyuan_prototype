@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>知识库管理 · 致远一号</title>
-  <link rel="stylesheet" href="./styles.css">
-  <script defer src="./admin.js"></script>
+  <link rel="stylesheet" href="./styles.css?v=documents-1">
+  <script defer src="./admin.js?v=documents-1"></script>
 </head>
 <body>
   <header class="topbar">
@@ -40,6 +40,17 @@
       </form>
     </section>
 
+    <section class="panel" id="services-panel" aria-labelledby="services-title" hidden>
+      <header class="panel-heading">
+        <h2 id="services-title">服务状态</h2>
+        <button type="button" class="quiet" id="check-services">检查服务</button>
+      </header>
+      <div class="service-status-body">
+        <p id="service-check-status" class="empty" role="status"></p>
+        <dl class="service-status-grid" id="service-status-list"></dl>
+      </div>
+    </section>
+
     <section class="panel" id="upload-panel" aria-labelledby="upload-title" hidden>
       <header class="panel-heading">
         <h2 id="upload-title">上传资料</h2>
@@ -51,7 +62,9 @@
           <input type="file" id="document-file" accept=".txt,.md,.pdf" aria-describedby="upload-formats" required>
           <button type="submit" class="primary" id="upload-submit">上传并入库</button>
         </div>
+        <p class="admin-help">替换旧手册请在下方「文档记录」中选择「替换为新版本」。新版本入库成功前，旧版继续用于检索。</p>
       </form>
+      <input type="file" id="replace-file" accept=".txt,.md,.pdf" hidden>
     </section>
 
     <section class="panel" id="documents-panel" aria-labelledby="documents-title" hidden>
@@ -65,10 +78,12 @@
           <thead>
             <tr>
               <th scope="col">文档</th>
+              <th scope="col">版本</th>
               <th scope="col">入库状态</th>
               <th scope="col">片段数</th>
               <th scope="col">上传时间</th>
               <th scope="col">失败原因</th>
+              <th scope="col">操作</th>
             </tr>
           </thead>
           <tbody id="document-rows"></tbody>

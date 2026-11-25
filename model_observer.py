@@ -14,6 +14,7 @@ DEFAULT_MODEL = "deepseek-chat"
 SUPPORTED_MODELS = (DEFAULT_MODEL, "qwen", "deepseek-reasoner")
 KEY_ENV = "ZHIYUAN_MODEL_API_KEY"
 BASE_URL_ENV = "ZHIYUAN_MODEL_BASE_URL"
+MODEL_TIMEOUT_NOTICE = "模型 API 请求超时"
 CONTEXT_FIELDS = ("route", "pending", "location", "vpn", "error")
 IMAGE_CONTEXT_FIELDS = ("route", "pending", "module", "base", "manifest", "declared", "distribution")
 
@@ -80,12 +81,14 @@ def parse_image_observation(content):
 
 class ZhiyuanObserver:
     def __init__(self, client, api_key, model=DEFAULT_MODEL, *, base_url=None):
-        if model not in SUPPORTED_MODELS:
-            raise ValueError("Unsupported Zhiyuan model")
+        self.base_url = (base_url or os.environ.get(BASE_URL_ENV) or BASE_URL).rstrip("/")
+        self.deepseek_official = self.base_url == "https://api.deepseek.com"
+        supported = ("deepseek-flash", "deepseek-v4-pro") if self.deepseek_official else SUPPORTED_MODELS
+        if model not in supported:
+            raise ValueError(f"Unsupported model. Expected one of: {', '.join(supported)}")
         self.client = client
         self.api_key = api_key
         self.model = model
-        self.base_url = (base_url or os.environ.get(BASE_URL_ENV) or BASE_URL).rstrip("/")
 
     def sanitize(self, message):
         return redact(message.replace(self.api_key, "[已遮盖]"))
@@ -109,6 +112,9 @@ class ZhiyuanObserver:
     async def complete(self, messages, *, max_tokens, on_delta=None):
         payload = {"model": self.model, "stream": on_delta is not None, "temperature": 0,
                    "max_tokens": max_tokens, "messages": messages}
+        if self.deepseek_official:
+            payload["thinking"] = {"type": "disabled"}
+            payload["response_format"] = {"type": "json_object"}
         url = f"{self.base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self.api_key}"}
         try:
@@ -122,9 +128,14 @@ class ZhiyuanObserver:
                 response = await self.client.post(url, headers=headers, json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                provider = "DeepSeek" if self.deepseek_official else "致远一号"
+                return None, f"{provider} 拒绝了当前 API Key（HTTP 401）。请更新项目 .env 中的 ZHIYUAN_MODEL_API_KEY 并重启网页。"
             return None, f"模型 API 返回 HTTP {exc.response.status_code}"
+        except httpx.ConnectTimeout:
+            return None, "连接致远一号模型 API 超时"
         except httpx.TimeoutException:
-            return None, "模型 API 请求超时"
+            return None, MODEL_TIMEOUT_NOTICE
         except (httpx.InvalidURL, httpx.UnsupportedProtocol):
             return None, "模型 API 地址无效"
         except httpx.RequestError:
@@ -154,4 +165,6 @@ class ZhiyuanObserver:
                 if isinstance(piece, str) and piece:
                     parts.append(piece)
                     on_delta("".join(parts))
+                if choice.get("finish_reason") is not None:
+                    return "".join(parts)
         return "".join(parts)

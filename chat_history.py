@@ -90,6 +90,24 @@ class ChatHistory:
                 WHERE owner = ? ORDER BY updated_at DESC, id DESC
             """, (UNTITLED, owner))]
 
+    def rename(self, owner, session_id, title):
+        with closing(self._connect()) as db, db:
+            updated = db.execute("""
+                UPDATE chat_history_conversations SET title = ? WHERE owner = ? AND id = ?
+            """, (_title(title), owner, session_id))
+            return bool(updated.rowcount)
+
+    def delete(self, owner, session_id):
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("""
+                DELETE FROM chat_history_turns WHERE owner = ? AND conversation_id = ?
+            """, (owner, session_id))
+            deleted = db.execute("""
+                DELETE FROM chat_history_conversations WHERE owner = ? AND id = ?
+            """, (owner, session_id))
+            return bool(deleted.rowcount)
+
     def append(self, owner, session_id, turn, state):
         """Save a sanitized turn and its workflow state in one transaction."""
         turn_json = json.dumps(turn, ensure_ascii=False)

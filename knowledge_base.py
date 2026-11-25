@@ -3,6 +3,7 @@
 import asyncio
 import heapq
 import math
+import os
 import re
 import sqlite3
 import struct
@@ -10,6 +11,7 @@ from bisect import bisect_left
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
@@ -18,6 +20,7 @@ from diagnosis import redact
 
 
 EMBEDDING_MODEL = "BAAI/bge-m3"
+OLLAMA_EMBEDDING_MODEL = "bge-m3"
 EMBEDDING_DIMENSIONS = 1024
 CHUNK_LENGTH = 800
 CHUNK_OVERLAP = 120
@@ -31,21 +34,55 @@ _PASSAGE_BREAK = re.compile(r"[\n。！？!?]+|(?<=\.)[ \t]+")
 _BINARY_CONTROL = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\x7f]")
 
 
+def official_source(value):
+    """Keep provenance links on the public documentation hosts used by the project."""
+    try:
+        url = urlsplit(value)
+        hostname = url.hostname or ""
+        if (url.scheme == "https" and url.netloc == hostname
+                and (hostname.endswith(".sjtu.edu.cn") or hostname in {
+                    "support.huaweicloud.com", "docs.docker.com", "pip.pypa.io",
+                }) and not any(char.isspace() or ord(char) < 32 for char in value)):
+            return value
+    except ValueError:
+        pass
+    return None
+
+
 class KnowledgeBaseError(Exception):
     """An error that can be shown to a knowledge-base user."""
 
 
 class BGEM3Embeddings:
-    def __init__(self, client, base_url, api_key=""):
+    def __init__(self, client, base_url, api_key="", *, model=None):
+        try:
+            address = urlsplit(base_url)
+            host, port = address.hostname, address.port
+        except ValueError:
+            address, host, port = None, None, None
+        if (not host or address.scheme not in {"http", "https"} or address.query
+                or address.fragment or address.username is not None
+                or any(char.isspace() for char in base_url)):
+            raise ValueError("ZHIYUAN_EMBEDDING_BASE_URL 必须是纯 HTTP(S) 地址，例如 http://127.0.0.1:11434/v1。")
         self.client = client
         self.url = f"{base_url.rstrip('/')}/embeddings"
         self.headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        local_ollama = host in {"localhost", "127.0.0.1", "::1"} and port == 11434
+        self.model = model or (OLLAMA_EMBEDDING_MODEL if local_ollama else EMBEDDING_MODEL)
+
+    @classmethod
+    def from_env(cls, client):
+        base_url = os.environ.get("ZHIYUAN_EMBEDDING_BASE_URL", "").strip()
+        if not base_url:
+            return None
+        return cls(client, base_url, os.environ.get("ZHIYUAN_EMBEDDING_API_KEY", "").strip(),
+                   model=os.environ.get("ZHIYUAN_EMBEDDING_MODEL", "").strip())
 
     async def embed(self, texts):
         try:
             response = await self.client.post(
                 self.url, headers=self.headers,
-                json={"model": EMBEDDING_MODEL, "input": texts, "encoding_format": "float"},
+                json={"model": self.model, "input": texts, "encoding_format": "float"},
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -75,7 +112,7 @@ class BGEM3Embeddings:
                 vectors[index] = [value / norm for value in vector]
             return vectors
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            raise KnowledgeBaseError("知识库向量服务返回了无效的 BAAI/bge-m3 向量。") from exc
+            raise KnowledgeBaseError("知识库向量服务未返回有效的 1024 维向量。") from exc
 
 
 def _pdf_pages(contents):
@@ -190,7 +227,12 @@ class KnowledgeBase:
                     status TEXT NOT NULL,
                     error TEXT,
                     chunk_count INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    source_url TEXT,
+                    sha256 TEXT,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    supersedes TEXT,
+                    superseded_by TEXT
                 );
                 CREATE TABLE IF NOT EXISTS chunks (
                     document_id TEXT NOT NULL REFERENCES documents(id),
@@ -200,31 +242,139 @@ class KnowledgeBase:
                     embedding BLOB NOT NULL,
                     PRIMARY KEY (document_id, position)
                 );
+                CREATE TABLE IF NOT EXISTS document_files (
+                    document_id TEXT PRIMARY KEY REFERENCES documents(id),
+                    contents BLOB NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS knowledge_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(documents)")}
+            for name, declaration in {
+                "source_url": "TEXT",
+                "sha256": "TEXT",
+                "version": "INTEGER NOT NULL DEFAULT 1",
+                "supersedes": "TEXT",
+                "superseded_by": "TEXT",
+            }.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE documents ADD COLUMN {name} {declaration}")
+            if self.embeddings is not None:
+                configured_model = self.embeddings.model
+                saved = db.execute("SELECT value FROM knowledge_settings WHERE key = 'embedding_model'").fetchone()
+                indexed = db.execute("SELECT 1 FROM chunks LIMIT 1").fetchone()
+                stored_model = saved["value"] if saved else EMBEDDING_MODEL
+                if indexed and stored_model != configured_model:
+                    raise ValueError("知识库向量模型与已有索引不一致。请使用原模型，或配置新的 ZHIYUAN_KNOWLEDGE_DB 并重新导入。")
+                db.execute("INSERT OR REPLACE INTO knowledge_settings VALUES ('embedding_model', ?)", (configured_model,))
             db.execute(
                 "UPDATE documents SET status = 'failed', error = ? WHERE status = 'processing'",
-                ("上次索引因服务重启而中断，请重新上传。",),
+                ("上次索引因服务重启而中断，请重新索引或重新上传。",),
             )
 
-    def create_document(self, filename, file_type):
+    def create_document(self, filename, file_type, *, source_url=None, sha256=None,
+                        contents=None, supersedes=None):
         file_type = _canonical_type(file_type)
         filename = self.sanitize(filename.replace("\\", "/").rsplit("/", 1)[-1])
         document_id = uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
         with closing(self._connect()) as db, db:
+            version = 1
+            previous_version = None
+            if supersedes is not None:
+                target = db.execute("SELECT version FROM documents WHERE id = ?", (supersedes,)).fetchone()
+                if target is None:
+                    raise KnowledgeBaseError("要替换的文档不存在。")
+                previous_version = target["version"]
+                version = db.execute("""
+                    WITH RECURSIVE
+                    ancestors(id) AS (
+                        SELECT ? AS id
+                        UNION ALL
+                        SELECT documents.supersedes FROM documents JOIN ancestors ON documents.id = ancestors.id
+                        WHERE documents.supersedes IS NOT NULL
+                    ),
+                    family(id) AS (
+                        SELECT id FROM ancestors
+                        UNION ALL
+                        SELECT documents.id FROM documents JOIN family ON documents.supersedes = family.id
+                    )
+                    SELECT COALESCE(MAX(version), 0) + 1 FROM documents WHERE id IN (SELECT id FROM family)
+                """, (supersedes,)).fetchone()[0]
             db.execute(
-                "INSERT INTO documents (id, filename, file_type, status, created_at) VALUES (?, ?, ?, 'processing', ?)",
-                (document_id, filename, file_type, created_at),
+                """INSERT INTO documents
+                       (id, filename, file_type, status, created_at, source_url, sha256, version, supersedes)
+                   VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, ?)""",
+                (document_id, filename, file_type, created_at,
+                 official_source(source_url) if source_url else None, sha256, version, supersedes),
             )
-        return {"id": document_id, "filename": filename, "status": "processing", "error": None,
-                "chunk_count": 0, "created_at": created_at}
+            if contents is not None:
+                db.execute("INSERT INTO document_files VALUES (?, ?)",
+                           (document_id, sqlite3.Binary(contents)))
+        return {"id": document_id, "filename": filename, "file_type": file_type,
+                "status": "processing", "error": None, "chunk_count": 0, "created_at": created_at,
+                "source_url": official_source(source_url) if source_url else None, "sha256": sha256,
+                "version": version, "supersedes": supersedes, "supersedes_version": previous_version,
+                "superseded_by": None, "superseded_by_version": None}
 
     def list_documents(self):
         with closing(self._connect()) as db:
             return [dict(row) for row in db.execute("""
-                SELECT id, filename, status, error, chunk_count, created_at
-                FROM documents ORDER BY created_at DESC, id DESC
+                SELECT documents.id, documents.filename, documents.status, documents.error,
+                       documents.chunk_count, documents.created_at, documents.source_url,
+                       documents.sha256, documents.version, documents.supersedes,
+                       documents.superseded_by,
+                       previous.version AS supersedes_version,
+                       successor.version AS superseded_by_version
+                FROM documents
+                LEFT JOIN documents AS previous ON previous.id = documents.supersedes
+                LEFT JOIN documents AS successor ON successor.id = documents.superseded_by
+                ORDER BY documents.created_at DESC, documents.id DESC
             """)]
+
+    def get_document(self, document_id):
+        with closing(self._connect()) as db:
+            row = db.execute("""
+                SELECT documents.id, documents.filename, documents.file_type, documents.status,
+                       documents.error, documents.chunk_count, documents.created_at,
+                       documents.source_url, documents.sha256, documents.version,
+                       documents.supersedes, documents.superseded_by,
+                       previous.version AS supersedes_version,
+                       successor.version AS superseded_by_version
+                FROM documents
+                LEFT JOIN documents AS previous ON previous.id = documents.supersedes
+                LEFT JOIN documents AS successor ON successor.id = documents.superseded_by
+                WHERE documents.id = ?
+            """, (document_id,)).fetchone()
+            return dict(row) if row else None
+
+    def prepare_retry(self, document_id):
+        """Reset a failed document and return the upload kept for re-indexing."""
+        with closing(self._connect()) as db, db:
+            row = db.execute(
+                "SELECT file_type, status, superseded_by FROM documents WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+            if row is None:
+                raise KnowledgeBaseError("文档不存在。")
+            if row["superseded_by"] is not None:
+                raise KnowledgeBaseError("该文档已被新版本替代，无需重新索引。")
+            if row["status"] != "failed":
+                raise KnowledgeBaseError("只有入库失败的文档可以重新索引。")
+            stored = db.execute(
+                "SELECT contents FROM document_files WHERE document_id = ?", (document_id,),
+            ).fetchone()
+            if stored is None:
+                raise KnowledgeBaseError("该文档的原始内容未保留，请重新上传。")
+            cursor = db.execute("""
+                UPDATE documents SET status = 'processing', error = NULL, chunk_count = 0
+                WHERE id = ? AND status = 'failed'
+            """, (document_id,))
+            if not cursor.rowcount:
+                raise KnowledgeBaseError("文档状态已变化，请刷新后重试。")
+            return row["file_type"], bytes(stored["contents"])
 
     async def index_document(self, document_id, file_type, contents):
         try:
@@ -243,20 +393,43 @@ class KnowledgeBase:
         except KnowledgeBaseError as exc:
             await asyncio.to_thread(self._fail_index, document_id, str(exc))
         except asyncio.CancelledError:
-            await asyncio.to_thread(self._fail_index, document_id, "索引处理已中断，请重新上传。")
+            await asyncio.to_thread(self._fail_index, document_id, "索引处理已中断，请重新索引或重新上传。")
             raise
         except Exception:
-            await asyncio.to_thread(self._fail_index, document_id, "建立索引时出现错误，请重新上传。")
+            await asyncio.to_thread(self._fail_index, document_id, "建立索引时出现错误，请重新索引或重新上传。")
             raise
 
     def _save_index(self, document_id, rows):
         with closing(self._connect()) as db, db:
             cursor = db.execute(
-                "UPDATE documents SET status = 'indexed', chunk_count = ? WHERE id = ? AND status = 'processing'",
+                """UPDATE documents SET status = 'indexed', error = NULL, chunk_count = ?
+                   WHERE id = ? AND status = 'processing'""",
                 (len(rows), document_id),
             )
-            if cursor.rowcount:
-                db.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?)", rows)
+            if not cursor.rowcount:
+                return
+            db.executemany("INSERT INTO chunks VALUES (?, ?, ?, ?, ?)", rows)
+            previous = db.execute("SELECT supersedes FROM documents WHERE id = ?",
+                                  (document_id,)).fetchone()["supersedes"]
+            ancestors = [row["id"] for row in db.execute("""
+                WITH RECURSIVE chain(id) AS (
+                    SELECT ? AS id
+                    UNION ALL
+                    SELECT documents.supersedes FROM documents JOIN chain ON documents.id = chain.id
+                    WHERE documents.supersedes IS NOT NULL
+                )
+                SELECT id FROM chain
+            """, (previous,))] if previous else []
+            if ancestors:
+                # The new version is searchable from now on; retire older indexed versions.
+                db.executemany(
+                    "UPDATE documents SET superseded_by = ? WHERE id = ? AND superseded_by IS NULL",
+                    [(document_id, ancestor) for ancestor in ancestors],
+                )
+                db.executemany(
+                    "UPDATE documents SET status = 'retired' WHERE id = ? AND status = 'indexed'",
+                    [(ancestor,) for ancestor in ancestors],
+                )
 
     def _fail_index(self, document_id, message):
         with closing(self._connect()) as db, db:
@@ -278,12 +451,15 @@ class KnowledgeBase:
 
     def _has_chunks(self):
         with closing(self._connect()) as db:
-            return db.execute("SELECT 1 FROM chunks LIMIT 1").fetchone() is not None
+            return db.execute("""
+                SELECT 1 FROM chunks JOIN documents ON documents.id = chunks.document_id
+                WHERE documents.status = 'indexed' LIMIT 1
+            """).fetchone() is not None
 
     def _find_chunks(self, query):
         with closing(self._connect()) as db:
             rows = db.execute("""
-                SELECT documents.id AS document_id, filename, location, text, embedding
+                SELECT documents.id AS document_id, filename, location, text, embedding, source_url
                 FROM chunks JOIN documents ON documents.id = chunks.document_id
                 WHERE documents.status = 'indexed'
             """)

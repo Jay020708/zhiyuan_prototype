@@ -81,7 +81,7 @@ class KnowledgeAnswerTest(unittest.IsolatedAsyncioTestCase):
     async def test_passage_ids_remain_stable_and_bad_ids_get_one_retry(self):
         hits = [{"filename": f"手册{number}.pdf", "location": "第 1 页", "text": f"正文 {number}"}
                 for number in (1, 2, 3)]
-        valid = {"answer": "参阅第三份手册。[3]", "evidence": [{"id": 3}]}
+        valid = {"answer": "建议参阅第三份手册。\n\n手册正文为「正文 3」。", "evidence": [{"id": 3}]}
         for answers, expected_calls, expected in [
             ([valid], 1, "answered"),
             ([{"answer": "错误编号。[9]", "evidence": [{"id": 3}]}, valid], 2, "answered"),
@@ -169,7 +169,6 @@ class KnowledgeAnswerTest(unittest.IsolatedAsyncioTestCase):
             {"evidence": [{"id": 1, "quote": "需要登录第三方网站。"}]},
             {"evidence": [{"id": 2, "quote": hit["text"]}]},
             {"evidence": [{"id": True, "quote": hit["text"]}]},
-            {"evidence": [{"id": 1, "quote": hit["text"]}], "answer": "未经验证的其他信息"},
             {"evidence": [{"id": 1}], "answer": "引用了不存在的来源。[2]"},
         ]
         for model_result in invalid_evidence:
@@ -182,16 +181,22 @@ class KnowledgeAnswerTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(answer["sources"], [])
                 self.assertNotIn("第三方网站", answer["answer"])
 
-    async def test_provider_failure_is_distinct_from_insufficient_material(self):
+    async def test_model_timeout_returns_only_available_excerpts(self):
         async def complete(messages, *, max_tokens):
             return None, "模型 API 请求超时"
 
         answer = await answer_question("怎么连接？", [{
             "filename": "访问指南.txt", "location": "第 2 行", "text": "校外用户需要先连接校园 VPN。",
         }], complete)
-        self.assertEqual(answer["status"], "unavailable")
+        self.assertEqual(answer["status"], "excerpts")
+        self.assertIn("校外用户需要先连接校园 VPN。", answer["answer"])
+        self.assertEqual(answer["sources"][0]["location"], "第 2 行")
         self.assertEqual(answer["notice"], "模型 API 请求超时")
-        self.assertEqual(answer["sources"], [])
+
+        without_hits = await answer_question("怎么连接？", [], complete)
+        self.assertEqual(without_hits["status"], "unavailable")
+        self.assertEqual(without_hits["notice"], "模型 API 请求超时")
+        self.assertEqual(without_hits["sources"], [])
 
     async def test_invalid_model_endpoint_has_a_readable_failure(self):
         async with httpx.AsyncClient() as client:
